@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- netstandard2.0: hem .NET Framework 4.6.1+ hem .NET 6/8 projelerinden kullanilabilir -->
+    <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
+    <LangVersion>7.3</LangVersion>
+    <RootNamespace>KopruKesim.Core</RootNamespace>
+  </PropertyGroup>
+</Project>
