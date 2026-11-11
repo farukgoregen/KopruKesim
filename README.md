@@ -17,12 +17,26 @@ Kamera görüntüsünden tabla üzerindeki mermerin köşe koordinatlarını (mm
 ## Çalıştırma
 ```
 dotnet run --project tests/KopruKesim.Tests
-dotnet run --project src/KopruKesim.Demo -- fotograf.jpg [bos_tabla.jpg]
+# Kurulum (bir kez, BOS tabla ile): koseleri bulur, kalibrasyon.txt + onizleme + referans kaydeder
+dotnet run --project src/KopruKesim.Demo -- kur bos_tabla.jpg
+# Olcum: kalinlik mm olarak verilir (verilmezse 20)
+dotnet run --project src/KopruKesim.Demo -- olc fotograf.jpg 20
 ```
 
+## Arayüz (yerel)
+`baslat.bat` dosyasına çift tıklayın ya da:
+```
+dotnet run --project src/KopruKesim.Web --urls http://localhost:5080
+```
+Sonra tarayıcıda http://localhost:5080 adresini açın. Önce boş tabla fotoğrafıyla kurulum, sonra kalınlık seçip mermer fotoğrafıyla ölçüm yapılır.
+
+## Ölçüler
+- Tabla 3300 × 2000 mm (gerçek ölçü).
+- Mermer kalınlığı parçaya göre değişir (10–30 mm); Demo'da sayısal argüman olarak verilir, verilmezse 20 mm (`TableCalibration.SlabThicknessMm`).
+
 ## Varsayımlar (güncellenecek)
-- Tabla 3500 × 2000 mm, mermer kalınlığı 20 mm (`TableCalibration`).
-- Tabla köşe pikselleri örnek fotoğraftan elle okundu (`Demo/Program.cs`).
+- Kurulumdan sonra `kalibrasyon_onizleme.jpg` gözle kontrol edilmeli; kamera yerinden oynarsa kurulum tekrarlanır.
+- Otomatik köşe bulma yalnızca boş tabloda güvenilir; tutmazsa `--tikla` ya da `--koseler x,y x,y x,y x,y` (sol üst = 0 noktası, sağ üst, sağ alt, sol alt).
 
 ## Kullanım özeti
 ```csharp

@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Köprü kesim ölçüm tablası</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --zemin: #d9dfe0;        /* atolye betonu */
+    --emaye: #f6f8f8;        /* makine govdesi beyazi */
+    --murekkep: #14232b;
+    --soluk: #55666f;
+    --cizgi: #b9c3c6;
+    --yesil: #147a43;        /* makine yesili: eylemler */
+    --yesil-koyu: #0e5c32;
+    --serit: #f4c20d;        /* serit metre sarisi: olculer */
+    --uyari: #b3380b;
+    --govde: "Barlow", "Segoe UI", system-ui, sans-serif;
+    --baslik: "Barlow Condensed", "Arial Narrow", "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--zemin); color: var(--murekkep);
+    font: 400 16px/1.45 var(--govde);
+    display: grid; grid-template-rows: auto 1fr; min-height: 100vh;
+  }
+  button, input { font: inherit; color: inherit; }
+  :focus-visible { outline: 3px solid var(--serit); outline-offset: 2px; }
+
+  /* Ust serit */
+  .ust {
+    display: flex; align-items: baseline; gap: 20px; flex-wrap: wrap;
+    padding: 14px 24px 12px; background: var(--murekkep); color: var(--emaye);
+  }
+  .ust h1 { margin: 0; font: 600 28px/1 var(--baslik); letter-spacing: .01em; }
+  .ust p { margin: 0; color: #a9b8be; font-size: 15px; }
+  .ust .durum { margin-left: auto; font-size: 15px; color: #cfd9dc; }
+  .ust .durum b { color: var(--serit); font-weight: 600; }
+
+  .duzen { display: grid; grid-template-columns: minmax(0, 1fr) 380px; min-height: 0; }
+
+  /* Sahne */
+  .sahne { padding: 20px 24px 24px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+  .sekmeler { display: flex; gap: 4px; }
+  .sekme {
+    border: 0; background: transparent; padding: 8px 14px; cursor: pointer;
+    font: 600 19px/1 var(--baslik); color: var(--soluk); border-bottom: 3px solid transparent;
+  }
+  .sekme[aria-selected="true"] { color: var(--murekkep); border-bottom-color: var(--yesil); }
+  .sekme:disabled { opacity: .4; cursor: default; }
+  .tuval {
+    flex: 1; min-height: 320px; background: var(--emaye); border: 1px solid var(--cizgi);
+    display: grid; place-items: center; position: relative; overflow: hidden;
+  }
+  .tuval svg { width: 100%; height: 100%; display: block; max-height: calc(100vh - 170px); }
+  .bos {
+    max-width: 44ch; padding: 32px; text-align: left;
+  }
+  .bos h2 { font: 600 30px/1.1 var(--baslik); margin: 0 0 10px; }
+  .bos p { margin: 0 0 18px; color: var(--soluk); }
+  .ipucu { margin: 0; font-size: 14px; color: var(--soluk); }
+
+  /* Kamera gorunumu */
+  .kose { cursor: grab; }
+  .kose:active { cursor: grabbing; }
+  .kose circle { fill: var(--serit); stroke: var(--murekkep); }
+  .cerceve { fill: rgba(244, 194, 13, .10); stroke: var(--serit); }
+  .eksen-yazi { font-family: var(--baslik); font-weight: 700; fill: var(--serit); paint-order: stroke; stroke: var(--murekkep); }
+
+  /* Ustten olcum */
+  .cetvel line { stroke: var(--murekkep); }
+  .cetvel text { font-family: var(--baslik); font-weight: 500; fill: var(--murekkep); }
+  .parca-cizgi { fill: rgba(244, 194, 13, .08); stroke: var(--serit); stroke-linejoin: round; paint-order: stroke; }
+  .parca-golge { fill: none; stroke: var(--murekkep); stroke-linejoin: round; }
+  .olcu rect { fill: var(--serit); }
+  .olcu text { font-family: var(--baslik); font-weight: 700; fill: var(--murekkep); }
+  .nokta circle { fill: var(--murekkep); stroke: var(--serit); }
+  .nokta text { font-family: var(--baslik); font-weight: 700; fill: var(--serit); }
+  .nokta.vurgu circle { fill: var(--serit); }
+  .nokta.vurgu text { fill: var(--murekkep); }
+  .sifir circle { fill: var(--yesil); stroke: var(--emaye); }
+  .sifir text { font-family: var(--baslik); font-weight: 700; fill: var(--yesil-koyu); }
+
+  /* Yan pano */
+  .pano { background: var(--emaye); border-left: 1px solid var(--cizgi); overflow-y: auto; }
+  .adim { padding: 20px 22px 22px; border-bottom: 1px solid var(--cizgi); }
+  .adim h2 { margin: 0 0 4px; font: 600 24px/1.1 var(--baslik); display: flex; gap: 10px; align-items: baseline; }
+  .adim h2 .no {
+    font-size: 17px; width: 26px; height: 26px; border-radius: 50%; flex: none;
+    display: inline-grid; place-items: center; background: var(--murekkep); color: var(--emaye);
+    transform: translateY(-2px);
+  }
+  .adim > p { margin: 0 0 14px; color: var(--soluk); font-size: 15px; }
+  .satir { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; margin-bottom: 14px; }
+  label.alan { display: grid; gap: 4px; font-size: 14px; color: var(--soluk); flex: 1; min-width: 110px; }
+  label.alan input {
+    padding: 8px 10px; border: 1px solid var(--cizgi); border-radius: 4px; background: #fff;
+    font: 600 20px/1.2 var(--baslik); font-variant-numeric: tabular-nums; width: 100%;
+  }
+  .dugme {
+    border: 1px solid var(--yesil-koyu); background: var(--yesil); color: #fff; cursor: pointer;
+    padding: 10px 16px; border-radius: 4px; font-weight: 600; font-size: 16px;
+  }
+  .dugme:hover { background: var(--yesil-koyu); }
+  .dugme.ikincil { background: transparent; color: var(--yesil-koyu); }
+  .dugme.ikincil:hover { background: rgba(20, 122, 67, .08); }
+  .dugme:disabled { opacity: .5; cursor: default; }
+  .dugmeler { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .kalinlik { display: flex; gap: 0; margin-bottom: 6px; }
+  .kalinlik label { flex: 1; }
+  .kalinlik input { position: absolute; opacity: 0; pointer-events: none; }
+  .kalinlik span {
+    display: block; text-align: center; padding: 9px 0; cursor: pointer;
+    border: 1px solid var(--cizgi); border-left-width: 0; background: #fff;
+    font: 600 22px/1 var(--baslik); font-variant-numeric: tabular-nums;
+  }
+  .kalinlik label:first-child span { border-left-width: 1px; border-radius: 4px 0 0 4px; }
+  .kalinlik label:last-child span { border-radius: 0 4px 4px 0; }
+  .kalinlik input:checked + span { background: var(--murekkep); color: var(--serit); border-color: var(--murekkep); }
+  .kalinlik input:focus-visible + span { outline: 3px solid var(--serit); outline-offset: 2px; position: relative; }
+  .onay { display: flex; gap: 10px; align-items: flex-start; font-size: 15px; margin: 12px 0 14px; cursor: pointer; }
+  .onay input { width: 18px; height: 18px; margin-top: 2px; accent-color: var(--yesil); }
+  .onay small { display: block; color: var(--soluk); font-size: 13.5px; }
+
+  .hata {
+    margin: 0 22px 0; padding: 10px 12px; border-left: 4px solid var(--uyari);
+    background: #fbeee8; color: #6d2206; font-size: 15px;
+  }
+  .hata[hidden] { display: none; }
+
+  .parca { padding: 18px 22px; border-bottom: 1px solid var(--cizgi); }
+  .parca h3 { margin: 0; font: 600 22px/1.1 var(--baslik); }
+  .parca .boyut { font: 700 40px/1.05 var(--baslik); font-variant-numeric: tabular-nums; margin: 6px 0 2px; }
+  .parca .boyut small { font-size: 20px; font-weight: 500; color: var(--soluk); }
+  .parca .ek { color: var(--soluk); font-size: 14.5px; margin: 0 0 10px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th { text-align: right; font-weight: 500; font-size: 13.5px; color: var(--soluk); padding: 2px 0 4px; }
+  th:first-child, td:first-child { text-align: left; }
+  td { text-align: right; padding: 5px 0; border-top: 1px solid var(--cizgi); font: 600 19px/1.2 var(--baslik); }
+  td:first-child { font-weight: 500; color: var(--soluk); }
+  tr.vurgu td { background: #fdf4c9; }
+  .kopya { margin-top: 12px; }
+
+  .calisiyor .tuval::after {
+    content: "Ölçülüyor…"; position: absolute; inset: auto 12px 12px auto; padding: 6px 12px;
+    background: var(--murekkep); color: var(--serit); font: 600 18px/1 var(--baslik);
+  }
+
+  @media (max-width: 900px) {
+    .duzen { grid-template-columns: 1fr; }
+    .pano { border-left: 0; border-top: 1px solid var(--cizgi); }
+    .sahne { padding: 14px; }
+    .tuval svg { max-height: 70vh; }
+  }
+</style>
+</head>
+<body>
+<header class="ust">
+  <h1>Köprü kesim ölçüm tablası</h1>
+  <p>Kamera fotoğrafından mermerin köşe koordinatları</p>
+  <div class="durum" id="durum">Kurulum bekleniyor</div>
+</header>
+
+<div class="duzen">
+  <main class="sahne" id="sahne">
+    <div class="sekmeler" role="tablist">
+      <button class="sekme" role="tab" id="sekmeKamera" aria-selected="true">Kamera görüntüsü</button>
+      <button class="sekme" role="tab" id="sekmeOlcum" aria-selected="false" disabled>Üstten ölçüm</button>
+    </div>
+    <div class="tuval" id="tuval">
+      <div class="bos" id="bosDurum">
+        <h2>Önce boş tablayı tanıtın</h2>
+        <p>Üzerinde hiçbir şey yokken tablanın fotoğrafını yükleyin. Program dört köşeyi bulur; sol üstte görünen köşe 0 noktası olur.</p>
+        <div class="dugmeler">
+          <button class="dugme" data-sec="kur">Boş tabla fotoğrafı seç</button>
+          <button class="dugme ikincil" data-ornek="bos">Örnek boş tablayı kullan</button>
+        </div>
+      </div>
+    </div>
+    <p class="ipucu" id="ipucu"></p>
+  </main>
+
+  <aside class="pano">
+    <section class="adim">
+      <h2><span class="no">1</span>Kurulum</h2>
+      <p>Kamera takıldığında bir kez yapılır. Kamera yerinden oynarsa tekrarlayın.</p>
+      <div class="satir">
+        <label class="alan">Tabla uzunluğu, X (mm)
+          <input id="uzunluk" type="number" min="100" step="1" value="3300" inputmode="numeric">
+        </label>
+        <label class="alan">Tabla genişliği, Y (mm)
+          <input id="genislik" type="number" min="100" step="1" value="2000" inputmode="numeric">
+        </label>
+      </div>
+      <div class="dugmeler">
+        <button class="dugme" data-sec="kur">Boş tabla fotoğrafı seç</button>
+        <button class="dugme ikincil" data-ornek="bos">Örnek boş tablayı kullan</button>
+      </div>
+    </section>
+
+    <section class="adim">
+      <h2><span class="no">2</span>Ölçüm</h2>
+      <p>Mermerin kalınlığını seçin, sonra fotoğrafını yükleyin.</p>
+      <div class="kalinlik" role="radiogroup" aria-label="Mermer kalınlığı">
+        <label><input type="radio" name="kalinlik" value="10"><span>10 mm</span></label>
+        <label><input type="radio" name="kalinlik" value="20" checked><span>20 mm</span></label>
+        <label><input type="radio" name="kalinlik" value="30"><span>30 mm</span></label>
+      </div>
+      <label class="onay">
+        <input type="checkbox" id="referans">
+        <span>Boş tabla fotoğrafıyla karşılaştır
+          <small>Koyu ya da tahta rengine yakın taşlar için. Yalnızca kamera kurulumdaki yerinde duruyorsa işe yarar.</small>
+        </span>
+      </label>
+      <div class="dugmeler">
+        <button class="dugme" data-sec="olc" id="olcDugme" disabled>Mermer fotoğrafı seç</button>
+        <button class="dugme ikincil" data-ornek="mermer" id="olcOrnek" disabled>Örnek mermeri kullan</button>
+      </div>
+    </section>
+
+    <p class="hata" id="hata" hidden role="alert"></p>
+    <div id="sonuc"></div>
+  </aside>
+</div>
+
+<input type="file" id="dosya" accept="image/*" hidden>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const NS = "http://www.w3.org/2000/svg";
+  const el = (ad, oz = {}, ...cocuk) => {
+    const e = document.createElementNS(NS, ad);
+    for (const k in oz) e.setAttribute(k, oz[k]);
+    cocuk.forEach(c => e.append(c));
+    return e;
+  };
+  const sayi = (v, hane = 0) => v.toLocaleString("tr-TR", { minimumFractionDigits: hane, maximumFractionDigits: hane, useGrouping: false });
+  const SEKIL = { Dikdortgen: "dikdörtgen", Kare: "kare", Ucgen: "üçgen", Cokgen: "çokgen" };
+
+  let durum = { kurulu: false };
+  let sonOlcum = null;      // son olcum yaniti
+  let sonFoto = null;       // son olculen fotograf (kalinlik degisince yeniden olcmek icin)
+  let bekleyen = null;      // dosya secici hangi is icin acildi: "kur" | "olc"
+  let gorunum = "kamera";
+
+  // ---------- sunucu ----------
+  async function istek(yol, form) {
+    const r = await fetch(yol, form ? { method: "POST", body: form } : undefined);
+    const veri = await r.json().catch(() => ({ hata: "Sunucudan anlaşılır bir yanıt gelmedi." }));
+    if (!r.ok) throw new Error(veri.hata || "İstek başarısız oldu.");
+    return veri;
+  }
+  function hata(mesaj) { const h = $("hata"); h.textContent = mesaj || ""; h.hidden = !mesaj; }
+
+  async function kur(dosya) {
+    hata("");
+    const f = new FormData();
+    f.append("dosya", dosya);
+    f.append("uzunluk", $("uzunluk").value);
+    f.append("genislik", $("genislik").value);
+    try {
+      const y = await istek("/api/kur", f);
+      durum = y.durum; sonOlcum = null; sonFoto = null; $("sonuc").replaceChildren();
+      gorunum = "kamera"; ciz();
+      if (!y.otomatikBulundu) hata("Tabla köşeleri otomatik bulunamadı. Sarı noktaları tablanın dört köşesine sürükleyin.");
+    } catch (e) { hata(e.message); }
+  }
+
+  async function koseleriKaydet() {
+    const f = new FormData();
+    f.append("koseler", durum.koseler.map(k => k.join(",")).join(";"));
+    f.append("uzunluk", $("uzunluk").value);
+    f.append("genislik", $("genislik").value);
+    try { durum = await istek("/api/koseler", f); hata(""); durumYaz(); if (sonFoto) olc(sonFoto, false); }
+    catch (e) { hata(e.message); }
+  }
+
+  async function olc(dosya, gecis = true) {
+    hata("");
+    const f = new FormData();
+    f.append("dosya", dosya);
+    f.append("kalinlik", document.querySelector("input[name=kalinlik]:checked").value);
+    f.append("referans", $("referans").checked ? "1" : "0");
+    $("sahne").classList.add("calisiyor");
+    try {
+      sonOlcum = await istek("/api/olc", f);
+      sonFoto = dosya;
+      if (gecis) gorunum = "olcum";
+      ciz(); sonucYaz();
+    } catch (e) { hata(e.message); }
+    finally { $("sahne").classList.remove("calisiyor"); }
+  }
+
+  async function ornek(ad) {
+    try {
+      const r = await fetch("/api/ornek/" + ad);
+      if (!r.ok) throw new Error("Örnek görsel bulunamadı.");
+      const dosya = new File([await r.blob()], ad + ".webp", { type: "image/webp" });
+      ad === "bos" ? await kur(dosya) : await olc(dosya);
+    } catch (e) { hata(e.message); }
+  }
+
+  // ---------- cizim ----------
+  function durumYaz() {
+    const d = $("durum");
+    if (!durum.kurulu) { d.textContent = "Kurulum bekleniyor"; }
+    else {
+      d.innerHTML = `Tabla <b>${sayi(durum.tabla.uzunluk)} × ${sayi(durum.tabla.genislik)} mm</b>` +
+        (durum.tutarlilik != null ? `, kamera tutarlılığı <b>${sayi(durum.tutarlilik, 2)}</b>` : "");
+      $("uzunluk").value = durum.tabla.uzunluk; $("genislik").value = durum.tabla.genislik;
+    }
+    $("olcDugme").disabled = $("olcOrnek").disabled = !durum.kurulu;
+    $("sekmeOlcum").disabled = !sonOlcum;
+    $("sekmeKamera").setAttribute("aria-selected", gorunum === "kamera");
+    $("sekmeOlcum").setAttribute("aria-selected", gorunum === "olcum");
+  }
+
+  function ciz() {
+    durumYaz();
+    const tuval = $("tuval");
+    if (!durum.kurulu) { $("ipucu").textContent = ""; return; }
+    if (gorunum === "olcum" && sonOlcum) { tuval.replaceChildren(olcumCiz()); $("ipucu").textContent = "Koordinatlar 0 noktasına göre milimetre. Sarı etiketler kenar uzunluğudur."; }
+    else { tuval.replaceChildren(kameraCiz()); $("ipucu").textContent = "Sarı çerçeve tablanın kenarlarına oturmalı. Oturmuyorsa köşe noktalarını sürükleyin; değişiklik bırakınca kaydedilir."; }
+  }
+
+  // Kamera fotografi + suruklenebilir dort kose
+  function kameraCiz() {
+    const { w, h } = durum.goruntu, b = Math.max(w, h) / 100;   // b: cizim birimi
+    const svg = el("svg", { viewBox: `0 0 ${w} ${h}`, role: "img", "aria-label": "Kamera görüntüsü ve tabla köşeleri" });
+    svg.append(el("image", { href: "/api/referans?t=" + Date.now(), width: w, height: h }));
+    const cerceve = el("polygon", { class: "cerceve", "stroke-width": b * 0.3 });
+    const etiket = [["0", 0], ["Y", 1], ["X", 3]].map(([yazi, i]) => {
+      const t = el("text", { class: "eksen-yazi", "font-size": b * 3.6, "stroke-width": b * 0.5, "text-anchor": "middle" });
+      t.textContent = yazi; t.dataset.i = i; return t;
+    });
+    const noktalar = durum.koseler.map((_, i) => {
+      const g = el("g", { class: "kose", tabindex: 0, role: "slider", "aria-label": ["0 noktası", "Y sonu", "Uzak köşe", "X sonu"][i] },
+        el("circle", { r: b * 1.1, "stroke-width": b * 0.3 }));
+      g.dataset.i = i; return g;
+    });
+    const yerlestir = () => {
+      const k = durum.koseler;
+      cerceve.setAttribute("points", k.map(p => p.join(",")).join(" "));
+      const orta = [k.reduce((s, p) => s + p[0], 0) / 4, k.reduce((s, p) => s + p[1], 0) / 4];
+      noktalar.forEach((g, i) => g.setAttribute("transform", `translate(${k[i][0]},${k[i][1]})`));
+      etiket.forEach(t => {
+        const p = k[t.dataset.i], dx = orta[0] - p[0], dy = orta[1] - p[1], u = Math.hypot(dx, dy) || 1;
+        t.setAttribute("x", p[0] + dx / u * b * 5); t.setAttribute("y", p[1] + dy / u * b * 5 + b * 1.2);
+      });
+    };
+    svg.append(cerceve, ...etiket, ...noktalar);
+    yerlestir();
+
+    // Surukleme (isaretci) ve ok tuslari
+    let aktif = null;
+    const konum = e => { const m = svg.getScreenCTM().inverse(); const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(m);
+      return [Math.min(w, Math.max(0, +p.x.toFixed(1))), Math.min(h, Math.max(0, +p.y.toFixed(1)))]; };
+    noktalar.forEach(g => {
+      g.addEventListener("pointerdown", e => { aktif = +g.dataset.i; g.setPointerCapture(e.pointerId); e.preventDefault(); });
+      g.addEventListener("pointermove", e => { if (aktif === null) return; durum.koseler[aktif] = konum(e); yerlestir(); });
+      g.addEventListener("pointerup", () => { if (aktif !== null) { aktif = null; koseleriKaydet(); } });
+      g.addEventListener("keydown", e => {
+        const ad = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+        if (!ad) return; e.preventDefault();
+        const i = +g.dataset.i, c = e.shiftKey ? 10 : 1;
+        durum.koseler[i] = [durum.koseler[i][0] + ad[0] * c, durum.koseler[i][1] + ad[1] * c]; yerlestir();
+        clearTimeout(g._t); g._t = setTimeout(koseleriKaydet, 500);
+      });
+    });
+    return svg;
+  }
+
+  // Ustten gorunum: mm cetveli, parcalar, kenar olculeri
+  function olcumCiz() {
+    const L = sonOlcum.tabla.uzunluk, W = sonOlcum.tabla.genislik;
+    const b = Math.max(L, W) / 100;                       // cizim birimi (mm)
+    const sol = b * 7, alt = b * 5.5, ust = b * 2, sag = b * 2.5;
+    const Y = y => W - y;                                 // tabla Y yukari, svg asagi
+    const svg = el("svg", { viewBox: `${-sol} ${-ust} ${L + sol + sag} ${W + ust + alt}`, role: "img", "aria-label": "Tablanın üstten görünümü ve ölçülen parçalar" });
+    svg.append(el("image", { href: sonOlcum.goruntu, x: 0, y: 0, width: L, height: W, preserveAspectRatio: "none" }));
+    svg.append(el("rect", { x: 0, y: 0, width: L, height: W, fill: "none", stroke: "var(--murekkep)", "stroke-width": b * 0.15 }));
+
+    // Cetveller: 100 mm cizgi, 500 mm yazi
+    const cetvel = el("g", { class: "cetvel" });
+    for (let x = 0; x <= L; x += 100) {
+      const buyuk = x % 500 === 0;
+      cetvel.append(el("line", { x1: x, x2: x, y1: W, y2: W + b * (buyuk ? 1.4 : 0.7), "stroke-width": b * (buyuk ? 0.18 : 0.1) }));
+      if (buyuk && x > 0) { const t = el("text", { x, y: W + b * 3.6, "text-anchor": "middle", "font-size": b * 1.9 }); t.textContent = sayi(x); cetvel.append(t); }
+    }
+    for (let y = 0; y <= W; y += 100) {
+      const buyuk = y % 500 === 0;
+      cetvel.append(el("line", { y1: Y(y), y2: Y(y), x1: 0, x2: -b * (buyuk ? 1.4 : 0.7), "stroke-width": b * (buyuk ? 0.18 : 0.1) }));
+      if (buyuk && y > 0) { const t = el("text", { x: -b * 1.9, y: Y(y) + b * 0.65, "text-anchor": "end", "font-size": b * 1.9 }); t.textContent = sayi(y); cetvel.append(t); }
+    }
+    const ex = el("text", { x: L, y: W + b * 5.2, "text-anchor": "end", "font-size": b * 1.7 }); ex.textContent = "X, mm";
+    const ey = el("text", { x: -sol + b * 0.3, y: -b * 0.5, "font-size": b * 1.7 }); ey.textContent = "Y, mm";
+    cetvel.append(ex, ey);
+    svg.append(cetvel);
+
+    // 0 noktasi
+    const sifir = el("g", { class: "sifir" }, el("circle", { cx: 0, cy: W, r: b * 0.9, "stroke-width": b * 0.25 }));
+    const st = el("text", { x: -b * 1.9, y: W + b * 3.6, "text-anchor": "end", "font-size": b * 2.6 }); st.textContent = "0";
+    sifir.append(st); svg.append(sifir);
+
+    sonOlcum.parcalar.forEach((p, pi) => {
+      const k = p.koseler, n = k.length;
+      const pts = k.map(v => `${v[0]},${Y(v[1])}`).join(" ");
+      svg.append(el("polygon", { class: "parca-golge", points: pts, "stroke-width": b * 0.75 }));
+      svg.append(el("polygon", { class: "parca-cizgi", points: pts, "stroke-width": b * 0.35 }));
+      const mx = k.reduce((s, v) => s + v[0], 0) / n, my = k.reduce((s, v) => s + v[1], 0) / n;
+      // Kenar uzunlugu etiketleri: kenarin ortasinda, parcanin icine dogru
+      k.forEach((a, i) => {
+        const c = k[(i + 1) % n], uz = p.kenarlar[i];
+        if (uz < b * 9) return;                            // kisa kenara etiket sigmaz
+        let x = (a[0] + c[0]) / 2, y = (a[1] + c[1]) / 2;
+        const dx = mx - x, dy = my - y, u = Math.hypot(dx, dy) || 1;
+        x += dx / u * b * 2.6; y += dy / u * b * 2.6;
+        const yazi = sayi(uz), gen = yazi.length * b * 1.25 + b * 1.4, yuk = b * 2.9;
+        const g = el("g", { class: "olcu" },
+          el("rect", { x: x - gen / 2, y: Y(y) - yuk / 2, width: gen, height: yuk, rx: b * 0.3 }));
+        const t = el("text", { x, y: Y(y) + b * 0.78, "text-anchor": "middle", "font-size": b * 2.2 }); t.textContent = yazi;
+        g.append(t); svg.append(g);
+      });
+      k.forEach((v, i) => {
+        const g = el("g", { class: "nokta", id: `n-${pi}-${i}` }, el("circle", { cx: v[0], cy: Y(v[1]), r: b * 1.35, "stroke-width": b * 0.25 }));
+        const t = el("text", { x: v[0], y: Y(v[1]) + b * 0.62, "text-anchor": "middle", "font-size": b * 1.7 }); t.textContent = i + 1;
+        g.append(t); svg.append(g);
+      });
+    });
+    return svg;
+  }
+
+  function sonucYaz() {
+    const kutu = $("sonuc"); kutu.replaceChildren();
+    if (!sonOlcum) return;
+    if (!sonOlcum.parcalar.length) {
+      const d = document.createElement("div"); d.className = "parca";
+      d.innerHTML = "<h3>Parça bulunamadı</h3><p class='ek'>Tabla boş görünüyor. Taş tahta rengine yakınsa “Boş tabla fotoğrafıyla karşılaştır” seçeneğini açıp yeniden deneyin.</p>";
+      kutu.append(d); return;
+    }
+    sonOlcum.parcalar.forEach((p, pi) => {
+      const d = document.createElement("div"); d.className = "parca";
+      const dortgen = p.koseler.length === 4;
+      const boyut = dortgen
+        ? `${sayi((p.kenarlar[0] + p.kenarlar[2]) / 2)} × ${sayi((p.kenarlar[1] + p.kenarlar[3]) / 2)} <small>mm</small>`
+        : `${sayi(p.alanCm2 / 10000, 2)} <small>m²</small>`;
+      d.innerHTML = `<h3>Parça ${pi + 1}, ${SEKIL[p.sekil] || p.sekil}</h3>
+        <div class="boyut">${boyut}</div>
+        <p class="ek">Alan ${sayi(p.alanCm2 / 10000, 2)} m², dönme ${sayi(p.donme, 1)}°, kalınlık ${sayi(sonOlcum.kalinlik)} mm</p>
+        <table><thead><tr><th>Köşe</th><th>X (mm)</th><th>Y (mm)</th></tr></thead><tbody>${
+          p.koseler.map((v, i) => `<tr data-n="n-${pi}-${i}"><td>${i + 1}</td><td>${sayi(v[0], 1)}</td><td>${sayi(v[1], 1)}</td></tr>`).join("")
+        }</tbody></table>`;
+      const kopya = document.createElement("button");
+      kopya.className = "dugme ikincil kopya"; kopya.textContent = "Köşeleri kopyala";
+      kopya.onclick = async () => {
+        const metin = p.koseler.map((v, i) => `K${i + 1}\t${v[0].toFixed(1)}\t${v[1].toFixed(1)}`).join("\n");
+        try { await navigator.clipboard.writeText(metin); kopya.textContent = "Köşeler kopyalandı"; }
+        catch { kopya.textContent = "Kopyalanamadı"; }
+        setTimeout(() => kopya.textContent = "Köşeleri kopyala", 1600);
+      };
+      d.append(kopya);
+      d.querySelectorAll("tbody tr").forEach(tr => {
+        const vurgu = ac => { tr.classList.toggle("vurgu", ac); document.getElementById(tr.dataset.n)?.classList.toggle("vurgu", ac); };
+        tr.onmouseenter = () => vurgu(true); tr.onmouseleave = () => vurgu(false);
+      });
+      kutu.append(d);
+    });
+  }
+
+  // ---------- olaylar ----------
+  document.querySelectorAll("[data-sec]").forEach(d => d.onclick = () => { bekleyen = d.dataset.sec; $("dosya").value = ""; $("dosya").click(); });
+  document.querySelectorAll("[data-ornek]").forEach(d => d.onclick = () => ornek(d.dataset.ornek));
+  $("dosya").onchange = e => { const f = e.target.files[0]; if (!f) return; bekleyen === "kur" ? kur(f) : olc(f); };
+  document.querySelectorAll("input[name=kalinlik]").forEach(r => r.onchange = () => sonFoto && olc(sonFoto, false));
+  $("referans").onchange = () => sonFoto && olc(sonFoto, false);
+  $("uzunluk").onchange = $("genislik").onchange = () => durum.kurulu && koseleriKaydet();
+  $("sekmeKamera").onclick = () => { gorunum = "kamera"; ciz(); };
+  $("sekmeOlcum").onclick = () => { if (sonOlcum) { gorunum = "olcum"; ciz(); } };
+
+  istek("/api/durum").then(d => { durum = d; ciz(); }).catch(e => hata(e.message));
+})();
+</script>
+</body>
+</html>

@@ -9,10 +9,10 @@ namespace KopruKesim.Core
     public sealed class TableCalibration
     {
         /// <summary>Tablanin X yonundeki (uzun kenar) olcusu, mm.</summary>
-        public double TableLengthMm = 3500;
+        public double TableLengthMm = 3300;
         /// <summary>Tablanin Y yonundeki (kisa kenar) olcusu, mm.</summary>
         public double TableWidthMm = 2000;
-        /// <summary>Mermer kalinligi, mm.</summary>
+        /// <summary>Mermer kalinligi, mm. Parcaya gore degisir (10-30 mm); her Detect oncesi guncellenebilir.</summary>
         public double SlabThicknessMm = 20;
 
         /// <summary>Kamera goruntusunun boyutu (piksel).</summary>
@@ -43,6 +43,70 @@ namespace KopruKesim.Core
                     new Point2(TableLengthMm, TableWidthMm), new Point2(TableLengthMm, 0)
                 });
             Camera = ManualCamera ?? CameraPose.Estimate(ImageToTable, ImageWidth, ImageHeight);
+        }
+
+        /// <summary>Kalibrasyonu duz metin dosyasina yazar (anahtar=deger). Kalinlik kaydedilmez; parcaya gore girilir.</summary>
+        public void Save(string path)
+        {
+            var c = System.Globalization.CultureInfo.InvariantCulture;
+            var lines = new[]
+            {
+                "# Kopru kesim tabla kalibrasyonu. Kamera yerinden oynarsa yeniden kurulmalidir.",
+                "TableLengthMm=" + TableLengthMm.ToString("R", c),
+                "TableWidthMm=" + TableWidthMm.ToString("R", c),
+                "ImageWidth=" + ImageWidth.ToString(c),
+                "ImageHeight=" + ImageHeight.ToString(c),
+                "CornerOrigin=" + CornerText(CornerOrigin),
+                "CornerYEnd=" + CornerText(CornerYEnd),
+                "CornerFar=" + CornerText(CornerFar),
+                "CornerXEnd=" + CornerText(CornerXEnd)
+            };
+            System.IO.File.WriteAllLines(path, lines);
+        }
+
+        /// <summary>Save ile yazilan dosyayi okur ve Build cagirir.</summary>
+        public static TableCalibration Load(string path)
+        {
+            var c = System.Globalization.CultureInfo.InvariantCulture;
+            var cal = new TableCalibration();
+            int found = 0;
+            foreach (string raw in System.IO.File.ReadAllLines(path))
+            {
+                string line = raw.Trim();
+                if (line.Length == 0 || line[0] == '#') continue;
+                int eq = line.IndexOf('=');
+                if (eq < 0) throw new FormatException("Kalibrasyon satiri anlasilamadi: " + line);
+                string key = line.Substring(0, eq).Trim(), val = line.Substring(eq + 1).Trim();
+                switch (key)
+                {
+                    case "TableLengthMm": cal.TableLengthMm = double.Parse(val, c); found |= 1; break;
+                    case "TableWidthMm": cal.TableWidthMm = double.Parse(val, c); found |= 2; break;
+                    case "ImageWidth": cal.ImageWidth = int.Parse(val, c); found |= 4; break;
+                    case "ImageHeight": cal.ImageHeight = int.Parse(val, c); found |= 8; break;
+                    case "CornerOrigin": cal.CornerOrigin = ParseCorner(val); found |= 16; break;
+                    case "CornerYEnd": cal.CornerYEnd = ParseCorner(val); found |= 32; break;
+                    case "CornerFar": cal.CornerFar = ParseCorner(val); found |= 64; break;
+                    case "CornerXEnd": cal.CornerXEnd = ParseCorner(val); found |= 128; break;
+                    default: throw new FormatException("Bilinmeyen kalibrasyon anahtari: " + key);
+                }
+            }
+            if (found != 255) throw new FormatException("Kalibrasyon dosyasi eksik: " + path);
+            cal.Build();
+            return cal;
+        }
+
+        private static string CornerText(Point2 p)
+        {
+            var c = System.Globalization.CultureInfo.InvariantCulture;
+            return p.X.ToString("F2", c) + "," + p.Y.ToString("F2", c);
+        }
+
+        private static Point2 ParseCorner(string text)
+        {
+            var c = System.Globalization.CultureInfo.InvariantCulture;
+            string[] p = text.Split(',');
+            if (p.Length != 2) throw new FormatException("Kose 'x,y' biciminde olmali: " + text);
+            return new Point2(double.Parse(p[0], c), double.Parse(p[1], c));
         }
 
         /// <summary>

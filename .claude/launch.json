@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "kopru-kesim-web",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "src/KopruKesim.Web", "--urls", "http://localhost:5080"],
+      "port": 5080
+    }
+  ]
+}

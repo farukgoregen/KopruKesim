@@ -1,0 +1,9 @@
+# Kopru kesim tabla kalibrasyonu. Kamera yerinden oynarsa yeniden kurulmalidir.
+TableLengthMm=3300
+TableWidthMm=2000
+ImageWidth=1536
+ImageHeight=1024
+CornerOrigin=362.25,100.87
+CornerYEnd=1112.09,103.98
+CornerFar=1328.14,912.17
+CornerXEnd=200.39,915.37

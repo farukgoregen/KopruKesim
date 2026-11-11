@@ -15,6 +15,8 @@ namespace KopruKesim.Vision
         public int DarkThreshold = 60;
         /// <summary>Referans goruntusu varken: parlaklik farki esigi.</summary>
         public int BrightnessDiffThreshold = 40;
+        /// <summary>Referans goruntusu varken: parlaklik (yari agirlik) + renk toplam farki esigi. 0 = kapali.</summary>
+        public double CombinedDiffThreshold = 16;
         /// <summary>Bundan kucuk lekeler / bosluklar temizlenir (mm).</summary>
         public double CleanupMm = 25;
         /// <summary>Tabla kenarindan bu kadar iceride kalan bolge taranir (mm).</summary>
@@ -84,6 +86,39 @@ namespace KopruKesim.Vision
             }
         }
 
+        /// <summary>
+        /// Referans yerine tek bir tabla rengi kullanir: tum tablanin ortanca (medyan) rengini alir.
+        /// Tablanin yaridan fazlasi bos gorunuyorsa calisir; bos bolge bilmek gerekmez.
+        /// </summary>
+        public void SetTableColorAuto(Mat frame)
+        {
+            using (Mat lab = ToLab(frame))
+            {
+                Mat[] ch = Cv2.Split(lab);
+                var median = new double[3];
+                try
+                {
+                    for (int i = 0; i < 3; i++)
+                    {
+                        using (var hist = new Mat())
+                        {
+                            Cv2.CalcHist(new[] { ch[i] }, new[] { 0 }, null, hist, 1, new[] { 256 }, new[] { new Rangef(0, 256) });
+                            double half = 0.5 * lab.Rows * lab.Cols, sum = 0;
+                            for (int v = 0; v < 256; v++)
+                            {
+                                sum += hist.Get<float>(v);
+                                if (sum >= half) { median[i] = v; break; }
+                            }
+                        }
+                    }
+                }
+                finally { foreach (Mat m in ch) m.Dispose(); }
+                if (_referenceLab != null) _referenceLab.Dispose();
+                _referenceLab = new Mat(lab.Size(), MatType.CV_8UC3, new Scalar(median[0], median[1], median[2]));
+                _hasRealReference = false;
+            }
+        }
+
         /// <summary>Goruntudeki mermerleri bulur; sonuclar buyukten kucuge alan sirasindadir.</summary>
         public List<SlabResult> Detect(Mat frame)
         {
@@ -121,6 +156,27 @@ namespace KopruKesim.Vision
                     if (_hasRealReference) Cv2.Threshold(d[0], tmp, _opt.BrightnessDiffThreshold, 255, ThresholdTypes.Binary);
                     else Cv2.Threshold(l[0], tmp, _opt.DarkThreshold, 255, ThresholdTypes.BinaryInv);
                     Cv2.BitwiseOr(mask, tmp, mask);
+                    // Referans varken toplam fark: parlaklik ve renk tek tek esigin altinda kalsa da
+                    // birlikte belirginse yakalanir (ornek: acik ahsap uzerinde beyaz mermer).
+                    if (_hasRealReference && _opt.CombinedDiffThreshold > 0)
+                    {
+                        using (var sum = new Mat())
+                        using (var f = new Mat())
+                        {
+                            d[0].ConvertTo(f, MatType.CV_32F, 0.5);   // parlaklik yari agirlikta (golge/isik oynamasi)
+                            Cv2.Multiply(f, f, sum);
+                            for (int i = 1; i < 3; i++)
+                            {
+                                d[i].ConvertTo(f, MatType.CV_32F);
+                                Cv2.Multiply(f, f, f);
+                                Cv2.Add(sum, f, sum);
+                            }
+                            Cv2.Sqrt(sum, sum);
+                            Cv2.Threshold(sum, f, _opt.CombinedDiffThreshold, 255, ThresholdTypes.Binary);
+                            f.ConvertTo(tmp, MatType.CV_8U);
+                            Cv2.BitwiseOr(mask, tmp, mask);
+                        }
+                    }
                 }
                 finally
                 {
