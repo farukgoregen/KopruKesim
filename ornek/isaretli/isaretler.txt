@@ -1,0 +1,13 @@
+# Sanal deneme yerlesimi (gercek makine icin olculmeli)
+TableLengthMm=3300
+TableWidthMm=2000
+MarkerHeightMm=0
+MarkerSizeMm=100
+Isaret=0,80,80
+Isaret=1,1650,80
+Isaret=2,3220,80
+Isaret=3,3220,1000
+Isaret=4,3220,1920
+Isaret=5,1650,1920
+Isaret=6,80,1920
+Isaret=7,80,1000

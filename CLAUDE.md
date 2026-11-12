@@ -1,59 +1,40 @@
 # Köprü Kesim – Mermer Konum Bulma
 
-Köprü kesim makinasının tablasına konan mermerin köşe koordinatlarını (mm) kamera görüntüsünden bulan C# projesi. Kullanıcıyla Türkçe konuş; kod tanımlayıcıları İngilizce, yorumlar Türkçe (ASCII).
+Kamera fotoğrafından tablaya konan mermerin köşe koordinatlarını (mm) bulan C# projesi. Kullanıcıyla Türkçe konuş; kod tanımlayıcıları İngilizce, yorumlar Türkçe (ASCII). Ayrıntılı geçmiş, ölçüm sonuçları ve denenip bırakılan yöntemler: `docs/gelistirme-notlari.md` (gerektiğinde oku).
 
 ## Koordinat sistemi
-- Orijin (0,0): kamera fotoğrafında sol üstte görünen tabla köşesi; yatay ekranda sol alt.
-- X: tablanın uzun kenarı (ekranda sağa), Y: kısa kenar (ekranda yukarı). Birim mm.
+- Orijin: fotoğrafta sol üstte görünen tabla köşesi (yatay görünümde sol alt). X uzun kenar, Y kısa kenar, mm.
+- Makinenin kendi sıfır köşesiyle aynı olduğu henüz teyit edilmedi.
 
 ## Yapı
-- `src/KopruKesim.Core` – bağımlılıksız (netstandard2.0, C# 7.3): Homography, CameraPose, TableCalibration, SlabLocator, PolygonMath.
-- `src/KopruKesim.Vision` – OpenCvSharp4: SlabDetector (düzeltme, ayırma, kontur), TableFinder (boş tabloda köşeleri otomatik bulur).
-- `src/KopruKesim.Demo` – konsol, iki komut:
-  - `dotnet run --project src/KopruKesim.Demo -- kur bos_tabla.jpg [--kal dosya] [--koseler ...] [--tikla] [--referanssiz]` – kurulum, bir kez: köşeleri bulur, kalibrasyonu, önizlemeyi ve boş tabla referansını kaydeder.
-  - `dotnet run --project src/KopruKesim.Demo -- olc foto.jpg [kalinlik_mm] [--kal dosya] [--kenar mm]` – ölçüm; `sonuc.jpg` yazar.
-- `src/KopruKesim.Web` – yerel deneme arayüzü (ASP.NET Core, tek sayfa `wwwroot/index.html`): `dotnet run --project src/KopruKesim.Web --urls http://localhost:5080` ya da `baslat.bat`. Kalibrasyon `src/KopruKesim.Web/veri/` içinde tutulur (git dışı).
-- `ornek/` – örnek görseller ve kalibrasyonları (`bos_tabla.webp` gerçek kamera değil, örnek olarak hazırlandı).
-- `tests/KopruKesim.Tests` – NuGet'siz test koşucusu: `dotnet run --project tests/KopruKesim.Tests`
+- `src/KopruKesim.Core` (netstandard2.0, C# 7.3, bağımlılıksız): Homography, CameraPose, TableCalibration, SlabLocator (köşe + kalınlık düzeltmesi), PolygonMath, MarkerLayout/MarkerSolver.
+- `src/KopruKesim.Vision` (OpenCvSharp4 4.10): TableFinder (tabla köşeleri), SlabDetector (renk yöntemi + şekil kontrolü), EdgeRectFinder (düz kenar yöntemi), MarkerFinder (ArUco), TableMeasure (ortak ölçüm akışı).
+- `src/KopruKesim.Demo` (konsol): `kur bos.jpg [--uzunluk --genislik --koseler ... --incelt N]`, `olc foto.jpg [kalinlik] [--kal --isaret --referanssiz --parlaklik --kenar-yontemi ...]`, `isaret-uret klasor`.
+- `src/KopruKesim.Web`: yerel arayüz, `baslat.bat` (http://localhost:5080) ya da ağ modu `baslat_ag.bat` (`-- --ag`, https://<bilgisayar-ip>:5443; telefon kamerası için https şart; kendinden imzalı sertifika `veri/` içinde üretilir). Kalibrasyon `veri/` içinde (git dışı). İnternette yayın yok: hedef makinede yerel çalışmak.
+- `tests/KopruKesim.Tests`: `dotnet run --project tests/KopruKesim.Tests`.
+- `ornek/`: deneme görselleri; `masa/kutulu.jpg` gerçek ölçülü (Klemsan kutusu 290×127×45 mm), `masa/plakali*.jpg` (plaka 330×205×4 mm). `bos_tabla*.webp` ve `mermer.webp` hazırlanmış görseller, gerçek kamera değil.
+- Hata ayıklama: `KK_DEBUG=1`.
 
-## Durum
-- Core testleri geçiyor.
-- Vision ve Demo gerçek OpenCvSharp 4.10 ile derlendi ve örnek fotoğrafta (`köprü kesim.jpeg`) doğrulandı (2026-11-11). Eski 3500×2000 varsayımıyla ve kalınlık düzeltmesiz sonuç, testteki konturla birebir aynıydı: (1512,45) (2804,43) (2816,642) (1518,654).
-- Gerçek tabla 3300×2000 mm girildi (2026-11-11); 2000 mm sağdaki üç ayrı tahtayı da kapsıyor, Demo'daki sağ köşe pikselleri buna göre taşındı (sağ üst 1776,121; sağ alt 2194,1505). Açık renkli plaka, 20 mm kalınlıkla yaklaşık: (1465,43) (2648,39) (2657,511) (1468,521), yani yaklaşık 1186×475 mm. Plakanın gerçek ölçüsü bilinmiyor; doğrulama için ölçülmeli.
-- Bu ayarla plaka 4 yerine 6 köşeli çıkıyor: sağ alt köşede, tahta aralığının maskeye karışmasından gelen 3 mm'lik bir çentik var. Plaka tabla kenarına ~36 mm yakın olduğu için Demo'da kenar şeridi 40 yerine 30 mm.
-- Kalınlık düzeltmesi kameradan uzak kenarları (sol ve alt) içeri çeker: 10 ile 30 mm arasında sol kenar yaklaşık 30 mm, alt kenar 6 mm oynuyor.
-- Mermer kalınlığı parçaya göre değişir (10–30 mm): Demo'da sayısal argüman, kodda `TableCalibration.SlabThicknessMm` (her `Detect` öncesi değiştirilebilir).
-- Kamera tutarlılık değeri 1,32 (ideal 1; eski köşelerle 2,00 idi): köşe pikselleri hâlâ elle okunmuş, lens bozulması da düzeltilmiyor.
-- Referanssız çalışmada siyah plaka yalnızca kısmen bulunuyor, tabladaki aletler de parça sayılıyor (toplam 5 parça).
-- `köprü kesim.jpeg` için köşe pikselleri elle okundu ve `ornek/kopru_kesim_kalibrasyon.txt` içinde duruyor (ölçüm: `olc "köprü kesim.jpeg" 20 --kal ornek/kopru_kesim_kalibrasyon.txt --kenar 30`).
+## Ölçüm akışı (özet)
+0. Web üç mod sunar (üstte seçim, tarayıcıda hatırlanır): Tek fotoğraf / Sabit kamera / İşaretli; her modda yalnız o modun alanları görünür. Telefonda ayarlar üstte, görüntü ve sonuç altta. Tek fotoğraf modu (varsayılan, `TableMeasure.RunSingle`): kurulum yok; tabla ölçüsü ayardan, tabla her ölçüm fotoğrafında bulunur. Kurulumlu mod ve işaretli mod da duruyor. Web "Canlı kamera": tarayıcı kamerasından kare alıp aynı yolla ölçer, sonucu görüntüye çizer (telefonda https gerekir; bu bilgisayarda kare başına ~3,5 sn).
+1. Tabla: renk (ahşap) + bölge büyütme (kenar bariyerli) adayları, kenar desteği en yüksek seçilir, `RefineCorners` ile piksel altı oturtma.
+2. Kamera kontrolü: kurulum kenarları yerinde değilse tabla ölçüm fotoğrafında yeniden bulunur; olmazsa uyarı. İşaret dosyası varsa kalibrasyon her fotoğrafta işaretlerden.
+3. Üstten görünüm (ölçek otomatik).
+4. Parça: renk/parlaklık maskesi; güvenilir sonuç yoksa düz kenar yöntemi (`EdgeMode.Fallback`).
+5. Köşeler kenarlara doğru oturtularak; kalınlık (operatör girer, 0+) ile uzak kenarlar içeri çekilir.
+6. Şekil kontrolü: plakaya benzemeyen nesneler "mermer değil", köşe verilmez.
 
-## Kurulum ve ölçüm akışı (2026-11-11)
-- 0 noktası: fotoğrafta sol üstte görünen tabla köşesi (yatay görünümde sol alt). Kurulumda bir kez belirlenir; operatör seçmez. Makinenin kendi sıfırıyla aynı köşe olmalı (henüz teyit edilmedi).
-- `kur` boş tabla ister. Dolu tabloda otomatik bulma yanlış köşe verir ama hata vermez; önizleme görseline bakıp onaylamak şart.
-- Doğrulama (`ornek/sanal_parcalar.png`, boş tabla görseline boyanmış ölçüsü bilinen iki dikdörtgen, kalınlık 0): köşeler 4 mm, kenar uzunlukları 2–5 mm içinde; koyu parça referans sayesinde tam bulundu. Gerçek kamera ve gerçek kalınlıkla sınanmadı.
-- `--tikla` (pencerede köşe tıklama) yazıldı ama hiç çalıştırılmadı.
-- Kalınlık operatörden alınır (10–30 mm); tek kameradan güvenilir hesaplanamıyor.
-
-## Web arayüzü ve mermerli örnek (2026-11-11)
-- `ornek/mermer.webp` (beyaz mermer, 20 mm): (1209,360) (2637,362) (2636,1388) (1213,1376), yaklaşık 1426×1022 mm. Gerçek ölçüsü bilinmiyor.
-- Bu görsel ile `ornek/bos_tabla.webp` aynı sahne DEĞİL (ayrı üretilmiş, tahta dokusu farklı); referansla karşılaştırma her yerde gürültü veriyor. Bu yüzden arayüzde referans varsayılan olarak kapalı, tabla rengi ortancadan (medyan) tahmin ediliyor (`SetTableColorAuto`). Gerçek sabit kamerada referans açık denenmeli.
-- Kameraya bakan kenarda yan yüzey ve gölge kenarı 30 mm kadar dalgalandırıyor; arayüz ve örnek ölçüm `SimplifyToleranceMm=30`, `MinEdgeMm=150` kullanıyor (Demo'da `--puruz 30 --minkenar 150`). O kenarın konumu ±15 mm belirsiz.
-- `DetectorOptions.CombinedDiffThreshold` (referans varken parlaklık+renk toplam farkı) eklendi; sanal parçalarda sonucu değiştirmedi.
-
-## Köşe bulma: testere kolu ve soluk tahtalar (2026-11-12)
-- Sorun (`ornek/bos_tabla_kol.jpg`, kullanıcının fotoğrafı): sağdaki üç tahta çok soluk (HSV doygunluk 2–17), renk maskesi onları tabla saymıyor; testere kolu da sağ kenarın ortasını kapatıyor. Eski yöntem sağ kenarı ana tablanın içinde buluyordu.
-- Çözüm (`TableFinder.FindCorners(frame, uzunluk, genislik)`): kaba dörtgen tutarsızsa her kenar boyunca ortadan dışarı yürünür, parlaklık geçişinin kesildiği yer kenarın gerçek ucudur. Bozuk kenarın köşeleri komşu kenarların bittiği yerden alınır; hangi kenarın bozuk olduğunu bilinen tabla ölçüsüyle tutarlılık seçer (fiziksel olarak anlamsız kamera konumları elenir). Sonra her yeni köşe, kenarın o uca yakın görünen parçasına doğru oturtularak inceltilir.
-- Sonuç: sağ üst köşe tahtanın ucuna oturuyor, sağ alt köşe ~5 px (~12 mm) dışarıda. `ornek/bos_tabla.webp` sonucu değişmedi.
-- Doğru köşelerle bu fotoğrafta tutarlılık 1,41 çıkıyor: fotoğraf büyük olasılıkla kırpılmış/yeniden boyutlandırılmış, optik merkez ortada değil. Bu durumda tutarlılık ve kalınlık düzeltmesi daha az güvenilir; gerçek kamerada kırpılmamış tam kare kullanılmalı.
-- Hata ayıklama: `KK_DEBUG=1` ortam değişkeni adayları konsola yazar.
-- Denenip bırakılan: bozuk kenarı kaçış noktası + tutarlılık=1 ile tahmin etmek. Diğer kenarlardaki birkaç piksellik açı hatası tahmini ~30 px kaydırıyor; tahta aralıkları ~60 px olduğu için güvenilmez.
+## Bilinen durum
+- Her web ölçümü `veri/olcumler/` altına fotoğraf + JSON olarak kaydedilir (son 300; git dışı) — sapan ölçümleri incelemek için. Yanıtta `kenarDestegi`, `tutarlilik`, `uyarilar` var; kırpılmış fotoğrafta tutarlılık uyarısı yanıltıcı olabilir.
+- Canlı mod: kamera ~0,6 sn sabit kalınca ölçer, ölçüm sırasında oynarsa sonucu atar, son 3–7 ölçümün ortancasını gösterir. Gizli tarayıcı panelinde sınanamadı (gerçek telefonda denenmeli).
+- Deneme masası 1500×800 mm (teyitli). Gerçek ölçülü nesneler, tek fotoğraf: kutu 290×127×45 → 293×126; plaka 330×205×4 → 330×205 (kırpılmış foto) ve 332×208 (orijinal foto, plaka 90° çevrik). Hata 0–3 mm. Sanal parçalarda ≤5 mm. Boş tablalarda sahte parça yok.
+- Kırpılmış fotoğrafta kamera hesabı (tutarlılık) bozulur, kalınlık düzeltmesi zayıflar.
+- Kenar yöntemi yalnız dörtgen parçalar için. İşaret yüksekliği düzeltmesi ve `--tikla` sınanmadı.
+- Kameraya bakan kenar ±15 mm belirsiz olabilir; SlabLocator bazen 0–1 mm'lik sahte köşe ekliyor.
 
 ## Sıradaki işler
-1. ~~Vision + Demo'yu derle, örnek fotoğrafta doğrula.~~ (yapıldı)
-2. ~~Gerçek tabla ölçülerini ve kalınlığı gir.~~ (yapıldı: 3300×2000, kalınlık parametre)
-3. ~~Boş tabla referans görüntüsüyle ayırmayı dene.~~ (yapıldı, sanal parçalarla)
-4. ~~Kalibrasyonu dosyaya kaydet/yükle, köşeleri otomatik bul.~~ (yapıldı; `--tikla` denenmedi)
-   - Gerçek sabit kameradan boş + dolu fotoğraf çiftiyle ve ölçüsü bilinen parçayla doğrula.
-   - Makinenin sıfır köşesini ve eksen yönlerini teyit et.
-5. Lens bozulması düzeltmesi.
-6. PLC ekranı için arayüz (WinForms/WPF) ve hedef .NET sürümü netleşecek.
+1. Gerçek sabit kamerada boş + dolu fotoğraf çifti ve ölçüsü bilinen birkaç parçayla doğrulama.
+2. Makine sıfırı ve eksen yönlerinin teyidi; konum işaretlerinin takılıp ölçülmesi.
+3. Lens bozulması kalibrasyonu.
+4. Canlı kamerayla sürekli ölçüm; sonucun PLC'ye iletilmesi.
+5. PLC ekranı arayüzü (WinForms/WPF) ve hedef .NET sürümü.
