@@ -16,7 +16,7 @@ Kamera fotoğrafından tablaya konan mermerin köşe koordinatlarını (mm) bula
 - Hata ayıklama: `KK_DEBUG=1`.
 
 ## Ölçüm akışı (özet)
-0. Tek fotoğraf modu (web varsayılanı, `TableMeasure.RunSingle`): kurulum yok; tabla ölçüsü ayardan, tabla her ölçüm fotoğrafında bulunur. Kurulumlu mod ve işaretli mod da duruyor. Web "Canlı kamera": tarayıcı kamerasından kare alıp aynı yolla ölçer, sonucu görüntüye çizer (telefonda https gerekir; bu bilgisayarda kare başına ~3,5 sn).
+0. Web üç mod sunar (üstte seçim, tarayıcıda hatırlanır): Tek fotoğraf / Sabit kamera / İşaretli; her modda yalnız o modun alanları görünür. Telefonda ayarlar üstte, görüntü ve sonuç altta. Tek fotoğraf modu (varsayılan, `TableMeasure.RunSingle`): kurulum yok; tabla ölçüsü ayardan, tabla her ölçüm fotoğrafında bulunur. Kurulumlu mod ve işaretli mod da duruyor. Web "Canlı kamera": tarayıcı kamerasından kare alıp aynı yolla ölçer, sonucu görüntüye çizer (telefonda https gerekir; bu bilgisayarda kare başına ~3,5 sn).
 1. Tabla: renk (ahşap) + bölge büyütme (kenar bariyerli) adayları, kenar desteği en yüksek seçilir, `RefineCorners` ile piksel altı oturtma.
 2. Kamera kontrolü: kurulum kenarları yerinde değilse tabla ölçüm fotoğrafında yeniden bulunur; olmazsa uyarı. İşaret dosyası varsa kalibrasyon her fotoğrafta işaretlerden.
 3. Üstten görünüm (ölçek otomatik).

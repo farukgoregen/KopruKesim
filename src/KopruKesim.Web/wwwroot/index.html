@@ -41,7 +41,38 @@
   .ust .durum { margin-left: auto; font-size: 15px; color: #cfd9dc; }
   .ust .durum b { color: var(--serit); font-weight: 600; }
 
-  .duzen { display: grid; grid-template-columns: minmax(0, 1fr) 380px; min-height: 0; }
+  .duzen {
+    display: grid; min-height: 0;
+    grid-template-columns: minmax(0, 1fr) 380px;
+    grid-template-rows: auto 1fr;
+    grid-template-areas: "sahne kontrol" "sahne sonuclar";
+  }
+  .kontrol { grid-area: kontrol; background: var(--emaye); border-left: 1px solid var(--cizgi); padding: 16px 20px 6px; }
+  .sonuclar { grid-area: sonuclar; background: var(--emaye); border-left: 1px solid var(--cizgi); overflow-y: auto; }
+  .sahne { grid-area: sahne; }
+  .modlar { display: flex; margin-bottom: 8px; }
+  .modlar label { flex: 1; }
+  .modlar input { position: absolute; opacity: 0; pointer-events: none; }
+  .modlar span {
+    display: block; text-align: center; padding: 9px 4px; cursor: pointer; border: 1px solid var(--cizgi); border-left-width: 0;
+    background: #fff; font: 600 17px/1.1 var(--baslik);
+  }
+  .modlar label:first-child span { border-left-width: 1px; border-radius: 4px 0 0 4px; }
+  .modlar label:last-child span { border-radius: 0 4px 4px 0; }
+  .modlar input:checked + span { background: var(--murekkep); color: var(--serit); border-color: var(--murekkep); }
+  .modlar input:focus-visible + span { outline: 3px solid var(--serit); outline-offset: 2px; position: relative; }
+  .mod-aciklama { margin: 0 0 12px; color: var(--soluk); font-size: 14px; }
+  .grup { padding: 12px 0 14px; border-top: 1px solid var(--cizgi); }
+  .grup h2 { margin: 0 0 8px; font: 600 21px/1.1 var(--baslik); }
+  .grup .satir { margin-bottom: 8px; }
+  .grup .onay { margin: 8px 0 0; }
+  .ana-dugmeler { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .ana-dugmeler #olcDugme { grid-column: 1 / -1; }
+  .dugme.buyuk { padding: 13px 14px; font-size: 17px; }
+  .canli-ayar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
+  .canli-ayar .onay { margin: 4px 0; }
+  .baglanti { border: 0; background: none; padding: 6px 0 0; color: var(--yesil-koyu); text-decoration: underline; cursor: pointer; font-size: 14.5px; }
+  [data-mod][hidden] { display: none !important; }
 
   /* Sahne */
   .sahne { padding: 20px 24px 24px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
@@ -184,69 +215,88 @@
   }
 
   @media (max-width: 900px) {
-    .duzen { grid-template-columns: 1fr; }
-    .pano { border-left: 0; border-top: 1px solid var(--cizgi); }
-    .sahne { padding: 14px; }
-    .tuval svg { max-height: 70vh; }
+    .duzen { grid-template-columns: 1fr; grid-template-rows: auto auto auto; grid-template-areas: "kontrol" "sahne" "sonuclar"; }
+    .kontrol, .sonuclar { border-left: 0; }
+    .kontrol { padding: 12px 14px 4px; border-bottom: 1px solid var(--cizgi); }
+    .sonuclar { border-top: 1px solid var(--cizgi); overflow: visible; }
+    .sahne { padding: 12px 14px; }
+    .tuval { min-height: 240px; }
+    .tuval svg, .canli video { max-height: 62vh; }
+    .ust { padding: 10px 14px; gap: 6px 14px; }
+    .ust h1 { font-size: 23px; }
+    .ust .durum { margin-left: 0; width: 100%; font-size: 14px; }
+    .bos { padding: 20px 16px; }
+    .bos h2 { font-size: 25px; }
+    .parca .boyut { font-size: 34px; }
+  }
+  @media (max-width: 420px) {
+    .modlar span { font-size: 15px; padding: 9px 2px; }
+    .ana-dugmeler { grid-template-columns: 1fr; }
+    .hizli { min-width: 0; }
   }
 </style>
 </head>
 <body>
 <header class="ust">
   <h1>Köprü kesim ölçüm tablası</h1>
-  <p>Kamera fotoğrafından mermerin köşe koordinatları</p>
-  <div class="durum" id="durum">Kurulum bekleniyor</div>
+  <div class="durum" id="durum"></div>
 </header>
 
 <div class="duzen">
-  <main class="sahne" id="sahne">
-    <div class="sekmeler" role="tablist">
-      <button class="sekme" role="tab" id="sekmeKamera" aria-selected="true">Kamera görüntüsü</button>
-      <button class="sekme" role="tab" id="sekmeOlcum" aria-selected="false" disabled>Üstten ölçüm</button>
+  <section class="kontrol" aria-label="Ayarlar ve ölçüm">
+    <div class="modlar" role="radiogroup" aria-label="Çalışma şekli">
+      <label><input type="radio" name="mod" value="tek" checked><span>Tek fotoğraf</span></label>
+      <label><input type="radio" name="mod" value="kurulum"><span>Sabit kamera</span></label>
+      <label><input type="radio" name="mod" value="isaret"><span>İşaretli</span></label>
     </div>
-    <div class="tuval" id="tuval">
-      <div class="bos" id="bosDurum">
-        <h2>Önce boş tablayı tanıtın</h2>
-        <p>Üzerinde hiçbir şey yokken tablanın fotoğrafını yükleyin. Program dört köşeyi bulur; sol üstte görünen köşe 0 noktası olur.</p>
-        <div class="dugmeler">
-          <button class="dugme" data-sec="kur">Boş tabla fotoğrafı seç</button>
-          <button class="dugme ikincil" data-ornek="bos">Örnek boş tablayı kullan</button>
-        </div>
-      </div>
-    </div>
-    <p class="ipucu" id="ipucu"></p>
-  </main>
+    <p class="mod-aciklama" id="modAciklama"></p>
+    <input type="checkbox" id="tekfoto" checked hidden>
 
-  <aside class="pano">
-    <section class="adim">
-      <h2><span class="no">1</span>Kurulum</h2>
-      <p>Kamera takıldığında bir kez yapılır. Kamera yerinden oynarsa tekrarlayın.</p>
+    <div class="grup" data-mod="tek kurulum">
+      <h2>Tabla</h2>
       <div class="satir">
-        <label class="alan">Tabla uzunluğu, X (mm)
+        <label class="alan">Uzunluk, X (mm)
           <input id="uzunluk" type="number" min="100" step="1" value="3300" inputmode="numeric">
         </label>
-        <label class="alan">Tabla genişliği, Y (mm)
+        <label class="alan">Genişlik, Y (mm)
           <input id="genislik" type="number" min="100" step="1" value="2000" inputmode="numeric">
         </label>
       </div>
-      <div class="dugmeler">
-        <button class="dugme" data-sec="kur">Boş tabla fotoğrafı seç</button>
-        <button class="dugme ikincil" data-ornek="bos">Örnek boş tablayı kullan</button>
-      </div>
-      <div class="isaret-kutu">
-        <h3>Konum işaretleri</h3>
-        <p id="isaretDurum">Kapalı. Kamera oynarsa ölçüm kayar.</p>
-        <p class="ipucu-kucuk">Makineye sabitlenmiş işaretlerin yerleşim dosyasını yükleyin. Kalibrasyon her fotoğrafta işaretlerden yeniden hesaplanır; kamera oynasa da ölçüm kaymaz.</p>
-        <div class="dugmeler">
-          <button class="dugme ikincil" data-sec="isaret">İşaret dosyası yükle</button>
-          <button class="dugme ikincil" id="isaretKaldir" hidden>İşaretleri kapat</button>
-        </div>
-      </div>
-    </section>
+      <label class="onay">
+        <input type="checkbox" id="tekrenk">
+        <span>Yüzey tek renkli (masa, levha)
+          <small>Ahşap tablada kapalı tutun; açıkken taştan biraz koyu ya da açık nesneler de bulunur.</small>
+        </span>
+      </label>
+    </div>
 
-    <section class="adim">
-      <h2><span class="no">2</span>Ölçüm</h2>
-      <p>Mermerin kalınlığını seçin, sonra fotoğrafını yükleyin.</p>
+    <div class="grup" data-mod="kurulum">
+      <h2>Kurulum</h2>
+      <p class="ipucu-kucuk">Kamera takılınca bir kez, tabla boşken yapılır. Kamera oynarsa tekrarlayın.</p>
+      <div class="dugmeler">
+        <button class="dugme ikincil" data-sec="kur">Boş tabla fotoğrafı seç</button>
+        <button class="dugme ikincil" data-ornek="bos">Örnek boş tabla</button>
+      </div>
+      <label class="onay">
+        <input type="checkbox" id="referans">
+        <span>Boş tabla fotoğrafıyla karşılaştır
+          <small>Koyu ya da tahta rengine yakın taşlar için; kamera kurulumdaki yerindeyse işe yarar.</small>
+        </span>
+      </label>
+    </div>
+
+    <div class="grup" data-mod="isaret">
+      <h2>Konum işaretleri</h2>
+      <p id="isaretDurum">Kapalı.</p>
+      <p class="ipucu-kucuk">Makineye sabitlenmiş işaretlerin yerleşim dosyası. Kalibrasyon her fotoğrafta işaretlerden hesaplanır.</p>
+      <div class="dugmeler">
+        <button class="dugme ikincil" data-sec="isaret">İşaret dosyası yükle</button>
+        <button class="dugme ikincil" id="isaretKaldir" hidden>İşaretleri kapat</button>
+      </div>
+    </div>
+
+    <div class="grup olcum-grup">
+      <h2>Ölçüm</h2>
       <div class="kalinlik-satir">
         <label class="alan">Kalınlık (mm)
           <input id="kalinlik" type="number" min="0" step="0.5" value="20" inputmode="decimal">
@@ -255,45 +305,36 @@
           <button type="button" data-k="0">0</button><button type="button" data-k="10">10</button><button type="button" data-k="20">20</button><button type="button" data-k="30">30</button>
         </div>
       </div>
-      <label class="onay">
-        <input type="checkbox" id="tekfoto" checked>
-        <span>Tek fotoğraf (kurulum yok)
-          <small>Tabla her ölçüm fotoğrafında yeniden bulunur; yukarıdaki tabla uzunluğu ve genişliği kullanılır. Kamera oynasa da sorun olmaz.</small>
-        </span>
-      </label>
-      <label class="onay">
-        <input type="checkbox" id="tekrenk">
-        <span>Tabla tek renkli
-          <small>Düz, tek renkli yüzeyde (masa, levha) taştan biraz koyu ya da açık nesneleri de bulur. Ahşap tablada kapalı tutun.</small>
-        </span>
-      </label>
-      <label class="onay">
-        <input type="checkbox" id="referans">
-        <span>Boş tabla fotoğrafıyla karşılaştır
-          <small>Koyu ya da tahta rengine yakın taşlar için. Yalnızca kamera kurulumdaki yerinde duruyorsa işe yarar.</small>
-        </span>
-      </label>
-      <div class="dugmeler">
-        <button class="dugme" data-sec="olc" id="olcDugme" disabled>Mermer fotoğrafı seç</button>
-        <button class="dugme ikincil" data-ornek="mermer" id="olcOrnek" disabled>Örnek mermeri kullan</button>
+      <div class="ana-dugmeler">
+        <button class="dugme buyuk" data-sec="olc" id="olcDugme">Fotoğraf yükle</button>
+        <button class="dugme buyuk ikincil" data-sec="cek" id="cekDugme">Fotoğraf çek</button>
+        <button class="dugme buyuk ikincil" id="canliDugme">Canlı kamera</button>
       </div>
-      <div class="canli-kutu">
-        <h3>Canlı kamera</h3>
-        <p class="ipucu-kucuk">Kamera görüntüsünden belirli aralıklarla kare alıp ölçer; sonuç görüntünün üstüne çizilir. Telefonda çalışması için sayfanın https ile açılması gerekir.</p>
-        <div class="dugmeler">
-          <button class="dugme" id="canliDugme">Kamerayı aç</button>
-          <button class="dugme ikincil" id="kareDugme" hidden>Bu kareyi ölç</button>
-        </div>
-        <label class="onay"><input type="checkbox" id="surekli" checked><span>Sürekli ölç (her ölçüm bitince yenisi)</span></label>
+      <div class="canli-ayar">
+        <button class="dugme ikincil" id="kareDugme" hidden>Bu kareyi ölç</button>
+        <label class="onay"><input type="checkbox" id="surekli" checked><span>Canlıda sürekli ölç</span></label>
       </div>
-    </section>
+      <button class="baglanti" data-ornek="mermer" id="olcOrnek" data-mod="kurulum">Örnek mermerle dene</button>
+    </div>
+  </section>
 
+  <main class="sahne" id="sahne">
+    <div class="sekmeler" role="tablist">
+      <button class="sekme" role="tab" id="sekmeKamera" aria-selected="true">Fotoğraf</button>
+      <button class="sekme" role="tab" id="sekmeOlcum" aria-selected="false" disabled>Üstten ölçüm</button>
+    </div>
+    <div class="tuval" id="tuval"></div>
+    <p class="ipucu" id="ipucu"></p>
+  </main>
+
+  <section class="sonuclar" aria-label="Sonuçlar">
     <p class="hata" id="hata" hidden role="alert"></p>
     <div id="sonuc"></div>
-  </aside>
+  </section>
 </div>
 
 <input type="file" id="dosya" accept="image/*" hidden>
+<input type="file" id="cekDosya" accept="image/*" capture="environment" hidden>
 
 <script>
 (() => {
@@ -376,6 +417,8 @@
       sonFoto = dosya;
       if (gecis) gorunum = "olcum";
       ciz(); sonucYaz();
+      // Telefonda sonuc ayarlarin altinda kalir: goruntuye kaydir
+      if (window.matchMedia("(max-width: 900px)").matches) $("sahne").scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (e) { hata(e.message); }
     finally { $("sahne").classList.remove("calisiyor"); }
   }
@@ -392,10 +435,15 @@
   // ---------- cizim ----------
   function durumYaz() {
     const d = $("durum");
-    if (!durum.kurulu) { d.textContent = "Kurulum bekleniyor"; }
-    else {
-      d.innerHTML = `Tabla <b>${sayi(durum.tabla.uzunluk)} × ${sayi(durum.tabla.genislik)} mm</b>` +
-        (durum.tutarlilik != null ? `, kamera tutarlılığı <b>${sayi(durum.tutarlilik, 2)}</b>` : "");
+    if (mod === "tek") {
+      d.innerHTML = `Tek fotoğraf, tabla <b>${sayi(+$("uzunluk").value || 0)} × ${sayi(+$("genislik").value || 0)} mm</b>`;
+    } else if (mod === "isaret") {
+      d.innerHTML = durum.isaretli ? `İşaretli, <b>${durum.isaretli.sayi} işaret</b>` : "İşaretli: dosya yüklenmedi";
+    } else if (!durum.kurulu || !durum.koseler) {
+      d.textContent = "Sabit kamera: kurulum bekleniyor";
+    } else {
+      d.innerHTML = `Sabit kamera, tabla <b>${sayi(durum.tabla.uzunluk)} × ${sayi(durum.tabla.genislik)} mm</b>` +
+        (durum.tutarlilik != null ? `, tutarlılık <b>${sayi(durum.tutarlilik, 2)}</b>` : "");
       $("uzunluk").value = durum.tabla.uzunluk; $("genislik").value = durum.tabla.genislik;
     }
     const isd = $("isaretDurum");
@@ -404,7 +452,8 @@
       isd.className = "acik";
     } else { isd.textContent = "Kapalı. Kamera oynarsa ölçüm kayar."; isd.className = ""; }
     $("isaretKaldir").hidden = !durum.isaretli;
-    $("olcDugme").disabled = $("olcOrnek").disabled = !(durum.kurulu || $("tekfoto").checked);
+    const hazir = mod === "tek" || (mod === "kurulum" && durum.kurulu && durum.koseler) || (mod === "isaret" && durum.isaretli);
+    ["olcDugme", "cekDugme", "canliDugme", "olcOrnek"].forEach(id => $(id).disabled = !hazir);
     $("sekmeOlcum").disabled = !sonOlcum;
     $("sekmeKamera").setAttribute("aria-selected", gorunum === "kamera");
     $("sekmeOlcum").setAttribute("aria-selected", gorunum === "olcum");
@@ -420,7 +469,7 @@
       return;
     }
     if (gorunum === "olcum" && sonOlcum) { tuval.replaceChildren(olcumCiz()); $("ipucu").textContent = "Koordinatlar 0 noktasına göre milimetre. Sarı etiketler kenar uzunluğudur."; return; }
-    if (!durum.kurulu) { $("ipucu").textContent = ""; return; }
+    if (mod === "tek" || (mod === "isaret" && !durum.isaretli) || !durum.kurulu || !durum.koseler) { tuval.replaceChildren(bosDurum()); $("ipucu").textContent = ""; return; }
     if (gorunum === "olcum" && sonOlcum) { tuval.replaceChildren(olcumCiz()); $("ipucu").textContent = "Koordinatlar 0 noktasına göre milimetre. Sarı etiketler kenar uzunluğudur."; }
     else if (!durum.koseler) {
       const k = document.createElement("div"); k.className = "bos";
@@ -443,6 +492,24 @@
   }
 
   // Kamera fotografi + suruklenebilir dort kose
+  // Moda gore bos ekran: ne yapilacagini soyler
+  function bosDurum() {
+    const k = document.createElement("div"); k.className = "bos";
+    const metin = {
+      tek: ["Fotoğraf yükleyin", "Tablanın tamamı ve üstündeki taş görünecek şekilde çekilmiş bir fotoğraf yükleyin. Kurulum gerekmez: tabla bu fotoğrafta bulunur, taş ona göre ölçülür. Soldaki tabla ölçüsünün doğru olduğundan emin olun."],
+      kurulum: ["Önce boş tablayı tanıtın", "Sabit kamerada bir kez, tabla boşken fotoğraf yükleyin. Program dört köşeyi bulur; sonra her ölçümde yalnızca taşın fotoğrafı yüklenir."],
+      isaret: ["İşaret dosyasını yükleyin", "Makineye sabitlenmiş konum işaretlerinin yerleşim dosyasını yükleyin; sonra taşın fotoğrafını yükleyin."]
+    }[mod];
+    k.innerHTML = `<h2>${metin[0]}</h2><p>${metin[1]}</p>`;
+    const dd = document.createElement("div"); dd.className = "dugmeler";
+    const b1 = document.createElement("button"); b1.className = "dugme";
+    if (mod === "tek") { b1.textContent = "Fotoğraf yükle"; b1.onclick = () => $("olcDugme").click(); }
+    else if (mod === "kurulum") { b1.textContent = "Boş tabla fotoğrafı seç"; b1.onclick = () => document.querySelector('[data-sec="kur"]').click(); }
+    else { b1.textContent = "İşaret dosyası yükle"; b1.onclick = () => document.querySelector('[data-sec="isaret"]').click(); }
+    dd.append(b1); k.append(dd);
+    return k;
+  }
+
   // Tek fotograf modunda son olculen fotograf + programin buldugu tabla koseleri (yalniz gosterim)
   function tekFotoCiz() {
     const { w, h } = sonOlcum.goruntuBoyutu, b = Math.max(w, h) / 100, k = sonOlcum.tablaKoseleri;
@@ -640,7 +707,9 @@
   }
 
   // ---------- olaylar ----------
+  $("cekDosya").onchange = e => { const f = e.target.files[0]; if (f) olc(f); e.target.value = ""; };
   document.querySelectorAll("[data-sec]").forEach(d => d.onclick = () => {
+    if (d.dataset.sec === "cek") { $("cekDosya").click(); return; }
     bekleyen = d.dataset.sec; $("dosya").value = "";
     $("dosya").accept = bekleyen === "isaret" ? ".txt,text/plain" : "image/*";
     $("dosya").click();
@@ -656,9 +725,36 @@
   document.querySelectorAll(".hizli button").forEach(b => b.onclick = () => { $("kalinlik").value = b.dataset.k; kalinlikDegisti(); });
   kalinlikDegisti();
   $("referans").onchange = () => sonFoto && olc(sonFoto, false);
-  $("uzunluk").onchange = $("genislik").onchange = () => durum.kurulu && koseleriKaydet();
+  // Sunucudaki sabit kamera kurulumunun olcusu yalnizca o modda degistirilir
+  $("uzunluk").onchange = $("genislik").onchange = () => mod === "kurulum" && durum.kurulu && koseleriKaydet();
   $("sekmeKamera").onclick = () => { if (canli.akis) kamerayiKapat(); gorunum = "kamera"; ciz(); };
   $("sekmeOlcum").onclick = () => { if (sonOlcum) { if (canli.akis) kamerayiKapat(); gorunum = "olcum"; ciz(); } };
+
+  // ---------- calisma sekli (mod) ----------
+  let mod = "tek";
+  const MOD_ACIKLAMA = {
+    tek: "Kurulum yok. Tabla her fotoğrafta yeniden bulunur; kamera oynasa da olur.",
+    kurulum: "Kamera sabit. Boş tabla bir kez tanıtılır, sonra yalnızca taş fotoğrafı yüklenir.",
+    isaret: "Makinedeki konum işaretleri her fotoğrafta tablayı tanımlar."
+  };
+  function modUygula(yeni, kaydet = true) {
+    mod = yeni;
+    document.querySelectorAll('input[name="mod"]').forEach(r => r.checked = r.value === mod);
+    $("tekfoto").checked = mod === "tek";
+    // Tek fotograf modunun tabla olcusu kullanicinin kaydettigidir (sabit kamera kurulumunun olcusu ayridir)
+    if (mod === "tek") try {
+      const a = JSON.parse(localStorage.getItem("kopruKesimAyar") || "{}");
+      if (a.uzunluk) $("uzunluk").value = a.uzunluk;
+      if (a.genislik) $("genislik").value = a.genislik;
+    } catch (e) { }
+    $("modAciklama").textContent = MOD_ACIKLAMA[mod];
+    document.querySelectorAll("[data-mod]").forEach(e => e.hidden = !e.dataset.mod.split(" ").includes(mod));
+    if (kaydet) try { localStorage.setItem("kopruKesimMod", mod); } catch (e) { }
+    if (canli.akis) kamerayiKapat();
+    sonOlcum = null; $("sonuc").replaceChildren(); hata("");
+    gorunum = "kamera"; ciz();
+  }
+  document.querySelectorAll('input[name="mod"]').forEach(r => r.onchange = () => modUygula(r.value));
 
   // ---------- canli kamera ----------
   const canli = { akis: null, video: null, svg: null, yazi: null, mesgul: false, zamanlayici: null };
@@ -767,7 +863,7 @@
   window.addEventListener("resize", yerlestirSvg);
 
   // Tabla olcusu ve tercihler tarayicida hatirlanir (masa ya da ahsap tabla bir kez girilir)
-  const AYAR = ["uzunluk", "genislik", "tekfoto", "tekrenk"];
+  const AYAR = ["uzunluk", "genislik", "tekrenk"];
   try {
     const a = JSON.parse(localStorage.getItem("kopruKesimAyar") || "{}");
     AYAR.forEach(id => { if (a[id] === undefined) return; const e = $(id); if (e.type === "checkbox") e.checked = a[id]; else e.value = a[id]; });
@@ -776,6 +872,9 @@
     try { const a = {}; AYAR.forEach(id => { const e = $(id); a[id] = e.type === "checkbox" ? e.checked : e.value; }); localStorage.setItem("kopruKesimAyar", JSON.stringify(a)); } catch (e) { }
   };
   AYAR.forEach(id => $(id).addEventListener("change", () => { ayarKaydet(); durumYaz(); }));
+  let kayitliMod = "tek";
+  try { kayitliMod = localStorage.getItem("kopruKesimMod") || "tek"; } catch (e) { }
+  modUygula(["tek", "kurulum", "isaret"].includes(kayitliMod) ? kayitliMod : "tek", false);
   istek("/api/durum").then(d => { durum = d; ciz(); }).catch(e => { hata(e.message); durumYaz(); });
 })();
 </script>
