@@ -40,6 +40,14 @@ Köprü kesim makinasının tablasına konan mermerin köşe koordinatlarını (
 - Kameraya bakan kenarda yan yüzey ve gölge kenarı 30 mm kadar dalgalandırıyor; arayüz ve örnek ölçüm `SimplifyToleranceMm=30`, `MinEdgeMm=150` kullanıyor (Demo'da `--puruz 30 --minkenar 150`). O kenarın konumu ±15 mm belirsiz.
 - `DetectorOptions.CombinedDiffThreshold` (referans varken parlaklık+renk toplam farkı) eklendi; sanal parçalarda sonucu değiştirmedi.
 
+## Köşe bulma: testere kolu ve soluk tahtalar (2026-11-12)
+- Sorun (`ornek/bos_tabla_kol.jpg`, kullanıcının fotoğrafı): sağdaki üç tahta çok soluk (HSV doygunluk 2–17), renk maskesi onları tabla saymıyor; testere kolu da sağ kenarın ortasını kapatıyor. Eski yöntem sağ kenarı ana tablanın içinde buluyordu.
+- Çözüm (`TableFinder.FindCorners(frame, uzunluk, genislik)`): kaba dörtgen tutarsızsa her kenar boyunca ortadan dışarı yürünür, parlaklık geçişinin kesildiği yer kenarın gerçek ucudur. Bozuk kenarın köşeleri komşu kenarların bittiği yerden alınır; hangi kenarın bozuk olduğunu bilinen tabla ölçüsüyle tutarlılık seçer (fiziksel olarak anlamsız kamera konumları elenir). Sonra her yeni köşe, kenarın o uca yakın görünen parçasına doğru oturtularak inceltilir.
+- Sonuç: sağ üst köşe tahtanın ucuna oturuyor, sağ alt köşe ~5 px (~12 mm) dışarıda. `ornek/bos_tabla.webp` sonucu değişmedi.
+- Doğru köşelerle bu fotoğrafta tutarlılık 1,41 çıkıyor: fotoğraf büyük olasılıkla kırpılmış/yeniden boyutlandırılmış, optik merkez ortada değil. Bu durumda tutarlılık ve kalınlık düzeltmesi daha az güvenilir; gerçek kamerada kırpılmamış tam kare kullanılmalı.
+- Hata ayıklama: `KK_DEBUG=1` ortam değişkeni adayları konsola yazar.
+- Denenip bırakılan: bozuk kenarı kaçış noktası + tutarlılık=1 ile tahmin etmek. Diğer kenarlardaki birkaç piksellik açı hatası tahmini ~30 px kaydırıyor; tahta aralıkları ~60 px olduğu için güvenilmez.
+
 ## Sıradaki işler
 1. ~~Vision + Demo'yu derle, örnek fotoğrafta doğrula.~~ (yapıldı)
 2. ~~Gerçek tabla ölçülerini ve kalınlığı gir.~~ (yapıldı: 3300×2000, kalınlık parametre)

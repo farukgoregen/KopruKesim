@@ -61,7 +61,7 @@ static class Program
             if (click) corners = ClickCorners(frame);
             else if (corners == null)
             {
-                corners = TableFinder.FindCorners(frame);
+                corners = TableFinder.FindCorners(frame, length, width);
                 if (corners == null)
                 {
                     Console.WriteLine("Tabla koseleri otomatik bulunamadi. --tikla ya da --koseler ile elle verin.");
