@@ -5,8 +5,35 @@ using OpenCvSharp;
 
 // Yerel deneme arayuzu. Calistirma: dotnet run --project src/KopruKesim.Web
 // Kalibrasyon ve bos tabla referansi "veri" klasorunde tutulur.
-var builder = WebApplication.CreateBuilder(args);
+// Ag modu (--ag): ayni Wi-Fi'deki telefon/tablet https ile baglanir (tarayici kameraya ancak https ile izin verir).
+bool networkMode = args.Contains("--ag");
+var builder = WebApplication.CreateBuilder(args.Where(a => a != "--ag").ToArray());
+string[] lanUrls = Array.Empty<string>();
+if (networkMode)
+{
+    string certDir = Path.Combine(builder.Environment.ContentRootPath, "veri");
+    Directory.CreateDirectory(certDir);
+    var (cert, ips) = LanCertificate.LoadOrCreate(certDir);
+    builder.WebHost.ConfigureKestrel(o =>
+    {
+        // Yalnizca https: normal moddaki sunucu (5080) ayni anda acik olsa da cakismaz
+        o.ListenAnyIP(5443, l => l.UseHttps(cert));
+    });
+    lanUrls = ips.Select(ip => $"https://{ip}:5443").ToArray();
+}
 var app = builder.Build();
+if (networkMode)
+    app.Lifetime.ApplicationStarted.Register(() =>
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== AG MODU ===");
+        Console.WriteLine("Bu bilgisayarda:  https://localhost:5443");
+        foreach (string u in lanUrls) Console.WriteLine("Telefon/tablet:   " + u);
+        Console.WriteLine("Telefon ayni Wi-Fi'de olmali. Ilk acilista 'baglanti guvenli degil' uyarisi cikar:");
+        Console.WriteLine("sertifika bu bilgisayarda uretildigi icindir; 'Gelismis > Devam et' ile gecin.");
+        Console.WriteLine("Windows guvenlik duvari izin sorarsa yalnizca 'Ozel agler' icin izin verin.");
+        Console.WriteLine();
+    });
 app.UseDefaultFiles();
 app.UseStaticFiles();
 

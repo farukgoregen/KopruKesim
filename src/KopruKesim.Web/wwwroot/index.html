@@ -87,6 +87,15 @@
   .ipucu-kucuk { color: var(--soluk); font-size: 13.5px !important; }
   .isaret-bilgi { margin: 0 0 10px; color: var(--soluk); font-size: 14.5px; }
   .yontem { font: 500 14px/1 var(--govde); color: var(--soluk); margin-left: 6px; }
+  .canli-kutu { margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--cizgi); }
+  .canli-kutu h3 { margin: 0 0 4px; font: 600 19px/1.15 var(--baslik); }
+  .canli { position: relative; width: 100%; height: 100%; display: grid; place-items: center; background: #000; }
+  .canli video { max-width: 100%; max-height: calc(100vh - 170px); display: block; }
+  .canli svg { position: absolute; pointer-events: none; }
+  .canli .durum-yazi { position: absolute; left: 10px; top: 10px; padding: 4px 10px; background: var(--murekkep); color: var(--serit); font: 600 16px/1.2 var(--baslik); }
+  .canli-parca { fill: rgba(244, 194, 13, .15); stroke: var(--serit); }
+  .canli-etiket rect { fill: var(--serit); }
+  .canli-etiket text { font-family: var(--baslik); font-weight: 700; fill: var(--murekkep); }
   .nesneler ul { margin: 0; padding-left: 18px; color: var(--soluk); font-size: 14.5px; }
   .nesneler li { margin: 2px 0; }
   .olcu rect { fill: var(--serit); }
@@ -268,6 +277,15 @@
         <button class="dugme" data-sec="olc" id="olcDugme" disabled>Mermer fotoğrafı seç</button>
         <button class="dugme ikincil" data-ornek="mermer" id="olcOrnek" disabled>Örnek mermeri kullan</button>
       </div>
+      <div class="canli-kutu">
+        <h3>Canlı kamera</h3>
+        <p class="ipucu-kucuk">Kamera görüntüsünden belirli aralıklarla kare alıp ölçer; sonuç görüntünün üstüne çizilir. Telefonda çalışması için sayfanın https ile açılması gerekir.</p>
+        <div class="dugmeler">
+          <button class="dugme" id="canliDugme">Kamerayı aç</button>
+          <button class="dugme ikincil" id="kareDugme" hidden>Bu kareyi ölç</button>
+        </div>
+        <label class="onay"><input type="checkbox" id="surekli" checked><span>Sürekli ölç (her ölçüm bitince yenisi)</span></label>
+      </div>
     </section>
 
     <p class="hata" id="hata" hidden role="alert"></p>
@@ -329,7 +347,20 @@
     catch (e) { hata(e.message); }
   }
 
+  function olcumFormu(dosya) {
+    const f = new FormData();
+    f.append("dosya", dosya);
+    f.append("kalinlik", String(Math.max(0, parseFloat(String($("kalinlik").value).replace(",", ".")) || 0)));
+    f.append("referans", $("referans").checked ? "1" : "0");
+    f.append("tekrenk", $("tekrenk").checked ? "1" : "0");
+    f.append("tekfoto", $("tekfoto").checked ? "1" : "0");
+    f.append("uzunluk", $("uzunluk").value);
+    f.append("genislik", $("genislik").value);
+    return f;
+  }
+
   async function olc(dosya, gecis = true) {
+    if (canli.akis) kamerayiKapat();
     hata("");
     const f = new FormData();
     f.append("dosya", dosya);
@@ -381,6 +412,7 @@
 
   function ciz() {
     durumYaz();
+    if (gorunum === "canli" && canli.akis) return;   // canli goruntu kendi cizimini yapar
     const tuval = $("tuval");
     if (gorunum === "kamera" && sonOlcum && sonOlcum.tekFoto) {
       tuval.replaceChildren(tekFotoCiz());
@@ -625,8 +657,114 @@
   kalinlikDegisti();
   $("referans").onchange = () => sonFoto && olc(sonFoto, false);
   $("uzunluk").onchange = $("genislik").onchange = () => durum.kurulu && koseleriKaydet();
-  $("sekmeKamera").onclick = () => { gorunum = "kamera"; ciz(); };
-  $("sekmeOlcum").onclick = () => { if (sonOlcum) { gorunum = "olcum"; ciz(); } };
+  $("sekmeKamera").onclick = () => { if (canli.akis) kamerayiKapat(); gorunum = "kamera"; ciz(); };
+  $("sekmeOlcum").onclick = () => { if (sonOlcum) { if (canli.akis) kamerayiKapat(); gorunum = "olcum"; ciz(); } };
+
+  // ---------- canli kamera ----------
+  const canli = { akis: null, video: null, svg: null, yazi: null, mesgul: false, zamanlayici: null };
+
+  // 4 nokta esinden homografi (mm -> piksel); sonuclari canli goruntunun ustune cizmek icin
+  function homografi(src, dst) {
+    const A = [], b = [];
+    for (let i = 0; i < 4; i++) {
+      const [x, y] = src[i], [u, v] = dst[i];
+      A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
+      A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
+    }
+    for (let c = 0; c < 8; c++) {                       // kismi pivotlu Gauss eleme
+      let p = c; for (let r = c + 1; r < 8; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+      [A[c], A[p]] = [A[p], A[c]]; [b[c], b[p]] = [b[p], b[c]];
+      for (let r = c + 1; r < 8; r++) { const k = A[r][c] / A[c][c]; for (let j = c; j < 8; j++) A[r][j] -= k * A[c][j]; b[r] -= k * b[c]; }
+    }
+    const h = new Array(8);
+    for (let r = 7; r >= 0; r--) { let t = b[r]; for (let j = r + 1; j < 8; j++) t -= A[r][j] * h[j]; h[r] = t / A[r][r]; }
+    return ([x, y]) => { const w = h[6] * x + h[7] * y + 1; return [(h[0] * x + h[1] * y + h[2]) / w, (h[3] * x + h[4] * y + h[5]) / w]; };
+  }
+
+  async function kamerayiAc() {
+    hata("");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      hata("Bu tarayıcı kameraya erişime izin vermiyor. Sayfayı https ile ya da bu bilgisayarda localhost ile açın.");
+      return;
+    }
+    try {
+      canli.akis = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
+    } catch (e) { hata("Kamera açılamadı: " + (e.name === "NotAllowedError" ? "izin verilmedi." : e.message)); canli.akis = null; return; }
+    const kap = document.createElement("div"); kap.className = "canli";
+    canli.video = document.createElement("video"); canli.video.playsInline = true; canli.video.muted = true; canli.video.srcObject = canli.akis;
+    canli.svg = el("svg", {}); canli.yazi = document.createElement("div"); canli.yazi.className = "durum-yazi"; canli.yazi.textContent = "Kamera açılıyor…";
+    kap.append(canli.video, canli.svg, canli.yazi);
+    $("tuval").replaceChildren(kap);
+    await canli.video.play();
+    gorunum = "canli";
+    $("canliDugme").textContent = "Kamerayı kapat"; $("kareDugme").hidden = false;
+    $("ipucu").textContent = "Tablanın tamamı görünecek şekilde tutun. Sarı çerçeve bulunan tabla, kalın çizgiler ölçülen parçalardır.";
+    canli.svg.setAttribute("viewBox", `0 0 ${canli.video.videoWidth} ${canli.video.videoHeight}`);
+    new ResizeObserver(yerlestirSvg).observe(canli.video); yerlestirSvg();
+    if ($("surekli").checked) kareOlc();
+    else canli.yazi.textContent = "Hazır: \"Bu kareyi ölç\" ile ölçün";
+  }
+
+  function yerlestirSvg() {
+    if (!canli.video || !canli.svg) return;
+    const r = canli.video.getBoundingClientRect(), k = canli.video.parentElement.getBoundingClientRect();
+    Object.assign(canli.svg.style, { left: (r.left - k.left) + "px", top: (r.top - k.top) + "px", width: r.width + "px", height: r.height + "px" });
+  }
+
+  function kamerayiKapat() {
+    clearTimeout(canli.zamanlayici);
+    if (canli.akis) canli.akis.getTracks().forEach(t => t.stop());
+    canli.akis = null; canli.video = null; canli.svg = null;
+    $("canliDugme").textContent = "Kamerayı aç"; $("kareDugme").hidden = true;
+    if (gorunum === "canli") { gorunum = sonOlcum ? "olcum" : "kamera"; ciz(); }
+  }
+
+  async function kareOlc() {
+    if (!canli.akis || canli.mesgul) return;
+    canli.mesgul = true; canli.yazi.textContent = "Ölçülüyor…";
+    try {
+      const v = canli.video, c = document.createElement("canvas");
+      c.width = v.videoWidth; c.height = v.videoHeight;
+      c.getContext("2d").drawImage(v, 0, 0);
+      const kare = await new Promise(r => c.toBlob(r, "image/jpeg", 0.92));
+      const sonuc = await istek("/api/olc", olcumFormu(new File([kare], "kare.jpg", { type: "image/jpeg" })));
+      sonOlcum = sonuc; sonFoto = kare; hata(""); sonucYaz(); canliCiz(sonuc);
+      const n = sonuc.parcalar.filter(p => p.guvenilir).length;
+      canli.yazi.textContent = n ? `${n} parça ölçüldü` : "Parça bulunamadı";
+    } catch (e) {
+      if (canli.svg) canli.svg.replaceChildren();
+      if (canli.yazi) canli.yazi.textContent = e.message.length > 80 ? e.message.slice(0, 80) + "…" : e.message;
+    } finally {
+      canli.mesgul = false;
+      if (canli.akis && $("surekli").checked) canli.zamanlayici = setTimeout(kareOlc, 300);
+    }
+  }
+
+  // Bulunan tabla ve parcalari canli goruntunun ustune ciz (tabla mm -> goruntu pikseli)
+  function canliCiz(s) {
+    if (!canli.svg) return;
+    const svg = canli.svg; svg.replaceChildren();
+    const { w, h } = s.goruntuBoyutu; svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    const b = Math.max(w, h) / 100, L = s.tabla.uzunluk, W = s.tabla.genislik, k = s.tablaKoseleri;
+    svg.append(el("polygon", { class: "cerceve", points: k.map(p => p.join(",")).join(" "), "stroke-width": b * 0.25 }));
+    const H = homografi([[0, 0], [0, W], [L, W], [L, 0]], k);
+    s.parcalar.filter(p => p.guvenilir).forEach(p => {
+      const pts = p.koseler.map(H);
+      svg.append(el("polygon", { class: "canli-parca", points: pts.map(q => q.join(",")).join(" "), "stroke-width": b * 0.35 }));
+      const dortgen = p.koseler.length === 4;
+      const yazi = dortgen ? `${sayi((p.kenarlar[0] + p.kenarlar[2]) / 2)} × ${sayi((p.kenarlar[1] + p.kenarlar[3]) / 2)} mm` : `${sayi(p.alanCm2 / 10000, 2)} m²`;
+      const cx = pts.reduce((a, q) => a + q[0], 0) / pts.length, cy = pts.reduce((a, q) => a + q[1], 0) / pts.length;
+      const gen = yazi.length * b * 1.15 + b * 1.6, yuk = b * 3;
+      const g = el("g", { class: "canli-etiket" }, el("rect", { x: cx - gen / 2, y: cy - yuk / 2, width: gen, height: yuk, rx: b * 0.3 }));
+      const t = el("text", { x: cx, y: cy + b * 0.8, "text-anchor": "middle", "font-size": b * 2.2 }); t.textContent = yazi;
+      g.append(t); svg.append(g);
+    });
+  }
+
+  $("canliDugme").onclick = () => canli.akis ? kamerayiKapat() : kamerayiAc();
+  $("kareDugme").onclick = () => kareOlc();
+  $("surekli").onchange = () => { if ($("surekli").checked) kareOlc(); };
+  window.addEventListener("resize", yerlestirSvg);
 
   // Tabla olcusu ve tercihler tarayicida hatirlanir (masa ya da ahsap tabla bir kez girilir)
   const AYAR = ["uzunluk", "genislik", "tekfoto", "tekrenk"];

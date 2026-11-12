@@ -10,13 +10,13 @@ Kamera fotoğrafından tablaya konan mermerin köşe koordinatlarını (mm) bula
 - `src/KopruKesim.Core` (netstandard2.0, C# 7.3, bağımlılıksız): Homography, CameraPose, TableCalibration, SlabLocator (köşe + kalınlık düzeltmesi), PolygonMath, MarkerLayout/MarkerSolver.
 - `src/KopruKesim.Vision` (OpenCvSharp4 4.10): TableFinder (tabla köşeleri), SlabDetector (renk yöntemi + şekil kontrolü), EdgeRectFinder (düz kenar yöntemi), MarkerFinder (ArUco), TableMeasure (ortak ölçüm akışı).
 - `src/KopruKesim.Demo` (konsol): `kur bos.jpg [--uzunluk --genislik --koseler ... --incelt N]`, `olc foto.jpg [kalinlik] [--kal --isaret --referanssiz --parlaklik --kenar-yontemi ...]`, `isaret-uret klasor`.
-- `src/KopruKesim.Web`: yerel arayüz, `baslat.bat` ya da `dotnet run --project src/KopruKesim.Web --urls http://localhost:5080`. Kalibrasyon `veri/` içinde (git dışı).
+- `src/KopruKesim.Web`: yerel arayüz, `baslat.bat` (http://localhost:5080) ya da ağ modu `baslat_ag.bat` (`-- --ag`, https://<bilgisayar-ip>:5443; telefon kamerası için https şart; kendinden imzalı sertifika `veri/` içinde üretilir). Kalibrasyon `veri/` içinde (git dışı). İnternette yayın yok: hedef makinede yerel çalışmak.
 - `tests/KopruKesim.Tests`: `dotnet run --project tests/KopruKesim.Tests`.
 - `ornek/`: deneme görselleri; `masa/kutulu.jpg` gerçek ölçülü (Klemsan kutusu 290×127×45 mm), `masa/plakali*.jpg` (plaka 330×205×4 mm). `bos_tabla*.webp` ve `mermer.webp` hazırlanmış görseller, gerçek kamera değil.
 - Hata ayıklama: `KK_DEBUG=1`.
 
 ## Ölçüm akışı (özet)
-0. Tek fotoğraf modu (web varsayılanı, `TableMeasure.RunSingle`): kurulum yok; tabla ölçüsü ayardan, tabla her ölçüm fotoğrafında bulunur. Kurulumlu mod ve işaretli mod da duruyor.
+0. Tek fotoğraf modu (web varsayılanı, `TableMeasure.RunSingle`): kurulum yok; tabla ölçüsü ayardan, tabla her ölçüm fotoğrafında bulunur. Kurulumlu mod ve işaretli mod da duruyor. Web "Canlı kamera": tarayıcı kamerasından kare alıp aynı yolla ölçer, sonucu görüntüye çizer (telefonda https gerekir; bu bilgisayarda kare başına ~3,5 sn).
 1. Tabla: renk (ahşap) + bölge büyütme (kenar bariyerli) adayları, kenar desteği en yüksek seçilir, `RefineCorners` ile piksel altı oturtma.
 2. Kamera kontrolü: kurulum kenarları yerinde değilse tabla ölçüm fotoğrafında yeniden bulunur; olmazsa uyarı. İşaret dosyası varsa kalibrasyon her fotoğrafta işaretlerden.
 3. Üstten görünüm (ölçek otomatik).
