@@ -244,8 +244,20 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             enKotuMm = Math.Round(result.Markers.MaxMm, 1)
         };
         if (result.Error != null)
+        {
+            SaveMeasurement(bytes, thickness, formLength, formWidth, result, null, new List<string>());   // basarisiz olcum de incelensin
             return Results.Json(new { hata = TurkceHata(result.Error), isaretler }, statusCode: 400);
+        }
         List<SlabResult> slabs = result.Slabs;
+        // Guven: tabla koseleri ne kadar guvenilir bulundu (kenar destegi + kamera tutarliligi).
+        // Tutarlilik kirpilmamis fotografta ~1 olmali; uzaklasmasi koselerin ya da tabla olcusunun yanlis olabilecegini gosterir.
+        double? consistency = result.Calibration?.Camera == null ? (double?)null : result.Calibration.Camera.Consistency;
+        var uyarilar = new List<string>();
+        if (!double.IsNaN(result.TableSupport) && result.TableSupport < 0.8)
+            uyarilar.Add($"Tabla kenarları zayıf bulundu (%{result.TableSupport * 100:F0}).");
+        if (consistency != null && (consistency < 0.85 || consistency > 1.18))
+            uyarilar.Add($"Tabla köşeleri kamera geometrisiyle tam uyuşmuyor (tutarlılık {consistency:F2}). Köşeler ya da girilen tabla ölçüsü hatalı olabilir; Fotoğraf sekmesinde sarı çerçeveyi kontrol edin.");
+        string logId = SaveMeasurement(bytes, thickness, formLength, formWidth, result, consistency, uyarilar);
         TableCalibration used = result.Calibration;
         string image = "data:image/jpeg;base64," + Convert.ToBase64String(result.Rectified.ToBytes(".jpg"));
         return Results.Json(new
@@ -256,6 +268,9 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             goruntuBoyutu = new { w = used.ImageWidth, h = used.ImageHeight },
             tablaKoseleri = new[] { P(used.CornerOrigin), P(used.CornerYEnd), P(used.CornerFar), P(used.CornerXEnd) },
             tutarlilik = used.Camera == null ? (double?)null : Math.Round(used.Camera.Consistency, 2),
+            kenarDestegi = double.IsNaN(result.TableSupport) ? (double?)null : Math.Round(result.TableSupport, 2),
+            uyarilar,
+            kayit = logId,
             referansKullanildi = result.UsedReference,
             isaretler,
             kameraOynamis = result.CameraMoved,
@@ -304,6 +319,43 @@ app.MapPost("/api/isaretler/kaldir", () =>
         return Results.Json(State());
     }
 });
+
+// Olcum kaydi: her olcumun fotografi ve sonucu veri/olcumler altinda saklanir (git disi, yalniz bu bilgisayarda).
+// Sapan olcumleri sonradan inceleyebilmek icin. En fazla 300 olcum tutulur; eskileri silinir.
+string SaveMeasurement(byte[] photo, double thicknessMm, double lengthMm, double widthMm, MeasureOutput r, double? consistency, List<string> warnings)
+{
+    try
+    {
+        string dir = Path.Combine(dataDir, "olcumler");
+        Directory.CreateDirectory(dir);
+        string id = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+        File.WriteAllBytes(Path.Combine(dir, id + ".jpg"), photo);
+        var c = r.Calibration;
+        var info = new
+        {
+            zaman = DateTime.Now,
+            kalinlik = thicknessMm,
+            tabla = c == null ? null : new { uzunluk = c.TableLengthMm, genislik = c.TableWidthMm },
+            istenenTabla = new { uzunluk = lengthMm, genislik = widthMm },
+            goruntu = c == null ? null : new { w = c.ImageWidth, h = c.ImageHeight },
+            tablaKoseleri = c == null ? null : new[] { P(c.CornerOrigin), P(c.CornerYEnd), P(c.CornerFar), P(c.CornerXEnd) },
+            tutarlilik = consistency,
+            kenarDestegi = double.IsNaN(r.TableSupport) ? (double?)null : r.TableSupport,
+            uyarilar = warnings,
+            hata = r.Error,
+            parcalar = r.Slabs.Select(s => new { s.Method, s.IsReliable, kenarlar = s.EdgeLengths, koseler = s.Vertices.Select(P) })
+        };
+        File.WriteAllText(Path.Combine(dir, id + ".json"), System.Text.Json.JsonSerializer.Serialize(info, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        foreach (string old in Directory.GetFiles(dir, "*.jpg").OrderByDescending(f => f).Skip(300))
+        {
+            File.Delete(old);
+            string js = Path.ChangeExtension(old, ".json");
+            if (File.Exists(js)) File.Delete(js);
+        }
+        return id;
+    }
+    catch (IOException) { return null; }
+}
 
 // Cekirdek kutuphanenin ASCII mesajlarini arayuz icin Turkce harflere cevirir
 static string TurkceHata(string m) => m

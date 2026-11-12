@@ -29,6 +29,8 @@ namespace KopruKesim.Vision
         public double EdgeRatio = double.NaN;
         /// <summary>Olcum yapilamadiysa nedeni (Turkce). Doluysa Slabs bostur.</summary>
         public string Error;
+        /// <summary>Tek fotografta bulunan tablanin kenar destegi (0-1); kose guvenilirligi icin.</summary>
+        public double TableSupport = double.NaN;
 
         public void Dispose() { if (Rectified != null) Rectified.Dispose(); }
     }
@@ -55,7 +57,9 @@ namespace KopruKesim.Vision
         {
             var output = new MeasureOutput();
             Point2[] c = TableFinder.FindCorners(frame, lengthMm, widthMm);
-            if (c == null || TableFinder.EdgeSupport(frame, c).Average() < RelocateMinSupport)
+            double support = c == null ? 0 : TableFinder.EdgeSupport(frame, c).Average();
+            output.TableSupport = support;
+            if (c == null || support < RelocateMinSupport)
             {
                 output.Error = "Tabla bu fotografta bulunamadi. Tablanin tamami gorunecek sekilde yeniden cekin.";
                 return output;

@@ -25,6 +25,8 @@ Kamera fotoğrafından tablaya konan mermerin köşe koordinatlarını (mm) bula
 6. Şekil kontrolü: plakaya benzemeyen nesneler "mermer değil", köşe verilmez.
 
 ## Bilinen durum
+- Her web ölçümü `veri/olcumler/` altına fotoğraf + JSON olarak kaydedilir (son 300; git dışı) — sapan ölçümleri incelemek için. Yanıtta `kenarDestegi`, `tutarlilik`, `uyarilar` var; kırpılmış fotoğrafta tutarlılık uyarısı yanıltıcı olabilir.
+- Canlı mod: kamera ~0,6 sn sabit kalınca ölçer, ölçüm sırasında oynarsa sonucu atar, son 3–7 ölçümün ortancasını gösterir. Gizli tarayıcı panelinde sınanamadı (gerçek telefonda denenmeli).
 - Deneme masası 1500×800 mm (teyitli). Gerçek ölçülü nesneler, tek fotoğraf: kutu 290×127×45 → 293×126; plaka 330×205×4 → 330×205 (kırpılmış foto) ve 332×208 (orijinal foto, plaka 90° çevrik). Hata 0–3 mm. Sanal parçalarda ≤5 mm. Boş tablalarda sahte parça yok.
 - Kırpılmış fotoğrafta kamera hesabı (tutarlılık) bozulur, kalınlık düzeltmesi zayıflar.
 - Kenar yöntemi yalnız dörtgen parçalar için. İşaret yüksekliği düzeltmesi ve `--tikla` sınanmadı.
