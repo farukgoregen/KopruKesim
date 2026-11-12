@@ -16,6 +16,8 @@ string dataDir = Path.Combine(app.Environment.ContentRootPath, "veri");
 Directory.CreateDirectory(dataDir);
 string calPath = Path.Combine(dataDir, "kalibrasyon.txt");
 string refPath = Path.Combine(dataDir, "kalibrasyon_referans.png");
+string layoutPath = Path.Combine(dataDir, "isaretler.txt");
+MarkerLayout LoadLayout() => File.Exists(layoutPath) ? MarkerLayout.Load(layoutPath) : null;
 
 // Ornek gorseller depo kokundeki "ornek" klasorunden gelir
 string repoRoot = app.Environment.ContentRootPath;
@@ -26,15 +28,33 @@ IResult Fail(string message) => Results.Json(new { hata = message }, statusCode:
 
 object State()
 {
-    if (!File.Exists(calPath)) return new { kurulu = false };
+    MarkerLayout layout = LoadLayout();
+    var isaretli = layout == null ? null : new
+    {
+        sayi = layout.Markers.Count,
+        numaralar = layout.Markers.Select(m => m.Id),
+        yukseklik = layout.MarkerHeightMm
+    };
+    if (!File.Exists(calPath))
+    {
+        if (layout == null) return new { kurulu = false };
+        return new
+        {
+            kurulu = true,
+            tabla = new { uzunluk = layout.TableLengthMm, genislik = layout.TableWidthMm },
+            isaretli,
+            referansVar = File.Exists(refPath)
+        };
+    }
     TableCalibration cal = TableCalibration.Load(calPath);
     return new
     {
         kurulu = true,
-        tabla = new { uzunluk = cal.TableLengthMm, genislik = cal.TableWidthMm },
+        tabla = new { uzunluk = layout?.TableLengthMm ?? cal.TableLengthMm, genislik = layout?.TableWidthMm ?? cal.TableWidthMm },
         goruntu = new { w = cal.ImageWidth, h = cal.ImageHeight },
         koseler = new[] { P(cal.CornerOrigin), P(cal.CornerYEnd), P(cal.CornerFar), P(cal.CornerXEnd) },
         tutarlilik = cal.Camera == null ? (double?)null : Math.Round(cal.Camera.Consistency, 2),
+        isaretli,
         referansVar = File.Exists(refPath)
     };
 }
@@ -109,13 +129,18 @@ app.MapPost("/api/kur", async (HttpRequest req) =>
         if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
         Point2[] corners = TableFinder.FindCorners(frame, length, width);
         bool found = corners != null;
+        if (found)
+        {
+            try { SaveCalibration(corners, length, width, frame.Cols, frame.Rows); }
+            catch (ArgumentException) { found = false; }   // bulunan koselerle kalibrasyon kurulamadi
+        }
         if (!found)
         {
             // Bulunamadi: kullanici surukleyip duzeltsin diye iceride bir dortgen oner
             double mx = frame.Cols * 0.2, my = frame.Rows * 0.15;
             corners = new[] { new Point2(mx, my), new Point2(frame.Cols - mx, my), new Point2(frame.Cols - mx, frame.Rows - my), new Point2(mx, frame.Rows - my) };
+            SaveCalibration(corners, length, width, frame.Cols, frame.Rows);
         }
-        SaveCalibration(corners, length, width, frame.Cols, frame.Rows);
         Cv2.ImWrite(refPath, frame);
         return Results.Json(new { otomatikBulundu = found, durum = State() });
     }
@@ -135,6 +160,12 @@ app.MapPost("/api/koseler", async (HttpRequest req) =>
         double length = double.TryParse(form["uzunluk"], NumberStyles.Float, inv, out double l) ? l : old.TableLengthMm;
         double width = double.TryParse(form["genislik"], NumberStyles.Float, inv, out double w) ? w : old.TableWidthMm;
         if (length <= 0 || width <= 0) return Fail("Tabla ölçüleri sıfırdan büyük olmalı.");
+        // Surüklenen koseler kurulum fotografindaki kenarlara piksel alti hassasiyetle oturtulur
+        if (form["incelt"] == "1" && File.Exists(refPath))
+        {
+            using Mat setupFrame = Cv2.ImRead(refPath);
+            if (!setupFrame.Empty()) corners = TableFinder.RefineCorners(setupFrame, corners, Math.Max(8, setupFrame.Cols / 100));
+        }
         try { SaveCalibration(corners, length, width, old.ImageWidth, old.ImageHeight); }
         catch (Exception) { return Fail("Bu köşelerle geçerli bir tabla oluşmuyor. Köşeleri sırasıyla yerleştirin."); }
         return Results.Json(State());
@@ -147,42 +178,51 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
     IFormCollection form = await req.ReadFormAsync();
     byte[] bytes = await ReadFile(form);
     if (bytes == null) return Fail("Fotoğraf gelmedi.");
-    double thickness = double.TryParse(form["kalinlik"], NumberStyles.Float, inv, out double t) ? t : 20;
+    double thickness = double.TryParse(form["kalinlik"], NumberStyles.Float, inv, out double t) && t >= 0 ? t : 20;
     bool useReference = form["referans"] == "1";
+    bool uniformTable = form["tekrenk"] == "1";
     double margin = double.TryParse(form["kenar"], NumberStyles.Float, inv, out double m) ? m : 40;
     lock (gate)
     {
-        if (!File.Exists(calPath)) return Fail("Önce kurulum yapın: boş tablanın fotoğrafını yükleyin.");
-        TableCalibration cal = TableCalibration.Load(calPath);
-        cal.SlabThicknessMm = thickness;
+        MarkerLayout layout = LoadLayout();
+        TableCalibration cal = File.Exists(calPath) ? TableCalibration.Load(calPath) : null;
+        if (layout == null && cal == null) return Fail("Önce kurulum yapın: boş tablanın fotoğrafını yükleyin ya da işaret yerleşim dosyasını yükleyin.");
         using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
         if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
-        if (frame.Cols != cal.ImageWidth || frame.Rows != cal.ImageHeight)
-            return Fail($"Bu fotoğraf {frame.Cols}×{frame.Rows} piksel, kurulum ise {cal.ImageWidth}×{cal.ImageHeight}. Aynı kameradan çekilmiş bir fotoğraf yükleyin ya da kurulumu yenileyin.");
 
         // Kenar puruzu toleransi genis: kameraya bakan kenarda yan yuzey ve golge kenari dalgalandirir
         var options = new DetectorOptions
         {
             BorderMarginMm = margin,
+            MinAreaMm2 = 60 * 60,
+            NoReferenceBrightnessDiff = uniformTable ? 35 : 0,
+            CleanupMm = uniformTable ? 8 : 25,   // tek renkli tablada gurultu az; kucuk parcalarin koseleri yuvarlanmasin
             Locator = new LocatorOptions { SimplifyToleranceMm = 30, MinEdgeMm = 150 }
         };
-        using var detector = new SlabDetector(cal, options);
-        bool usedReference = false;
-        if (useReference && File.Exists(refPath))
+        using Mat empty = File.Exists(refPath) ? Cv2.ImRead(refPath) : null;
+        using MeasureOutput result = TableMeasure.Run(cal, frame, empty, useReference, options, layout, thickness);
+        var isaretler = result.Markers == null ? null : new
         {
-            using Mat empty = Cv2.ImRead(refPath);
-            if (!empty.Empty() && empty.Cols == frame.Cols && empty.Rows == frame.Rows) { detector.SetReference(empty); usedReference = true; }
-        }
-        if (!usedReference) detector.SetTableColorAuto(frame);
-
-        List<SlabResult> slabs = detector.Detect(frame);
-        using Mat view = detector.Rectify(frame);
-        string image = "data:image/jpeg;base64," + Convert.ToBase64String(view.ToBytes(".jpg"));
+            kullanilan = result.Markers.Used,
+            gorunmeyen = result.Markers.Missing,
+            atilan = result.Markers.Rejected,
+            ortalamaMm = Math.Round(result.Markers.RmsMm, 1),
+            enKotuMm = Math.Round(result.Markers.MaxMm, 1)
+        };
+        if (result.Error != null)
+            return Results.Json(new { hata = TurkceHata(result.Error), isaretler }, statusCode: 400);
+        List<SlabResult> slabs = result.Slabs;
+        TableCalibration used = result.Calibration;
+        string image = "data:image/jpeg;base64," + Convert.ToBase64String(result.Rectified.ToBytes(".jpg"));
         return Results.Json(new
         {
-            tabla = new { uzunluk = cal.TableLengthMm, genislik = cal.TableWidthMm },
+            tabla = new { uzunluk = used.TableLengthMm, genislik = used.TableWidthMm },
             kalinlik = thickness,
-            referansKullanildi = usedReference,
+            referansKullanildi = result.UsedReference,
+            isaretler,
+            kameraOynamis = result.CameraMoved,
+            tablaYenidenBulundu = result.Relocated,
+            kenarGorunurlugu = double.IsNaN(result.EdgeRatio) ? (double?)null : Math.Round(result.EdgeRatio, 2),
             goruntu = image,
             parcalar = slabs.Select(s => new
             {
@@ -191,10 +231,49 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
                 donme = Math.Round(s.RotationDeg, 1),
                 koseler = s.Vertices.Select(v => new[] { Math.Round(v.X, 1), Math.Round(v.Y, 1) }),
                 kenarlar = s.EdgeLengths.Select(e => Math.Round(e)),
-                acilar = s.AnglesDeg.Select(a => Math.Round(a, 1))
+                acilar = s.AnglesDeg.Select(a => Math.Round(a, 1)),
+                guvenilir = s.IsReliable,
+                yontem = s.Method,
+                not = s.Note
             })
         });
     }
 });
+
+// Isaret yerlesim dosyasi: yuklenince her olcum kalibrasyonu fotograftaki isaretlerden hesaplar
+app.MapPost("/api/isaretler", async (HttpRequest req) =>
+{
+    IFormCollection form = await req.ReadFormAsync();
+    byte[] bytes = await ReadFile(form);
+    if (bytes == null) return Fail("Dosya gelmedi.");
+    string tmp = Path.Combine(dataDir, "isaretler.yeni.txt");
+    lock (gate)
+    {
+        File.WriteAllBytes(tmp, bytes);
+        try { MarkerLayout.Load(tmp); }
+        catch (Exception e) when (e is FormatException || e is OverflowException) { File.Delete(tmp); return Fail("İşaret dosyası okunamadı: " + e.Message); }
+        File.Copy(tmp, layoutPath, true);
+        File.Delete(tmp);
+        return Results.Json(State());
+    }
+});
+
+app.MapPost("/api/isaretler/kaldir", () =>
+{
+    lock (gate)
+    {
+        if (File.Exists(layoutPath)) File.Delete(layoutPath);
+        return Results.Json(State());
+    }
+});
+
+// Cekirdek kutuphanenin ASCII mesajlarini arayuz icin Turkce harflere cevirir
+static string TurkceHata(string m) => m
+    .Replace("Yeterli isaret gorunmuyor", "Yeterli işaret görünmüyor").Replace("bulundu", "bulundu")
+    .Replace("Isaretler birbiriyle uyusmuyor", "İşaretler birbiriyle uyuşmuyor").Replace("en buyuk fark", "en büyük fark")
+    .Replace("Bir isaret yerinden oynamis olabilir; daha fazla isaret gorunur olmali.", "Bir işaret yerinden oynamış olabilir; daha fazla işaret görünür olmalı.")
+    .Replace("Isaretler gecerli bir kalibrasyon vermiyor (ayni dogru uzerinde olabilirler).", "İşaretler geçerli bir kalibrasyon vermiyor (aynı doğru üzerinde olabilirler).")
+    .Replace("Bu fotograf", "Bu fotoğraf").Replace("Ayni kameradan cekilmis bir fotograf yukleyin ya da kurulumu yenileyin.", "Aynı kameradan çekilmiş bir fotoğraf yükleyin ya da kurulumu yenileyin.")
+    .Replace("Kalibrasyon yok: once kurulum yapin.", "Kalibrasyon yok: önce kurulum yapın.");
 
 app.Run();

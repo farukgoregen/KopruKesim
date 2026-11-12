@@ -76,6 +76,19 @@
   .cetvel text { font-family: var(--baslik); font-weight: 500; fill: var(--murekkep); }
   .parca-cizgi { fill: rgba(244, 194, 13, .08); stroke: var(--serit); stroke-linejoin: round; paint-order: stroke; }
   .parca-golge { fill: none; stroke: var(--murekkep); stroke-linejoin: round; }
+  .nesne-cizgi { fill: rgba(20, 35, 43, .12); stroke: var(--emaye); stroke-linejoin: round; }
+  .uyari { margin: 16px 22px 0; padding: 12px 14px; border-left: 4px solid var(--uyari); background: #fbeee8; color: #6d2206; }
+  .uyari h3 { margin: 0 0 4px; font: 600 20px/1.15 var(--baslik); }
+  .uyari p { margin: 0; font-size: 14.5px; }
+  .isaret-kutu { margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--cizgi); }
+  .isaret-kutu h3 { margin: 0 0 2px; font: 600 19px/1.15 var(--baslik); }
+  .isaret-kutu p { margin: 0 0 8px; font-size: 14.5px; }
+  .isaret-kutu p.acik { color: var(--yesil-koyu); font-weight: 600; }
+  .ipucu-kucuk { color: var(--soluk); font-size: 13.5px !important; }
+  .isaret-bilgi { margin: 0 0 10px; color: var(--soluk); font-size: 14.5px; }
+  .yontem { font: 500 14px/1 var(--govde); color: var(--soluk); margin-left: 6px; }
+  .nesneler ul { margin: 0; padding-left: 18px; color: var(--soluk); font-size: 14.5px; }
+  .nesneler li { margin: 2px 0; }
   .olcu rect { fill: var(--serit); }
   .olcu text { font-family: var(--baslik); font-weight: 700; fill: var(--murekkep); }
   .nokta circle { fill: var(--murekkep); stroke: var(--serit); }
@@ -111,6 +124,16 @@
   .dugme:disabled { opacity: .5; cursor: default; }
   .dugmeler { display: flex; gap: 8px; flex-wrap: wrap; }
 
+  .kalinlik-satir { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; margin-bottom: 6px; }
+  .kalinlik-satir .alan { flex: 0 1 130px; }
+  .hizli { display: flex; flex: 1; min-width: 160px; }
+  .hizli button {
+    flex: 1; padding: 9px 0; cursor: pointer; border: 1px solid var(--cizgi); border-left-width: 0; background: #fff;
+    font: 600 20px/1 var(--baslik); font-variant-numeric: tabular-nums;
+  }
+  .hizli button:first-child { border-left-width: 1px; border-radius: 4px 0 0 4px; }
+  .hizli button:last-child { border-radius: 0 4px 4px 0; }
+  .hizli button[aria-pressed="true"] { background: var(--murekkep); color: var(--serit); border-color: var(--murekkep); }
   .kalinlik { display: flex; gap: 0; margin-bottom: 6px; }
   .kalinlik label { flex: 1; }
   .kalinlik input { position: absolute; opacity: 0; pointer-events: none; }
@@ -201,16 +224,34 @@
         <button class="dugme" data-sec="kur">Boş tabla fotoğrafı seç</button>
         <button class="dugme ikincil" data-ornek="bos">Örnek boş tablayı kullan</button>
       </div>
+      <div class="isaret-kutu">
+        <h3>Konum işaretleri</h3>
+        <p id="isaretDurum">Kapalı. Kamera oynarsa ölçüm kayar.</p>
+        <p class="ipucu-kucuk">Makineye sabitlenmiş işaretlerin yerleşim dosyasını yükleyin. Kalibrasyon her fotoğrafta işaretlerden yeniden hesaplanır; kamera oynasa da ölçüm kaymaz.</p>
+        <div class="dugmeler">
+          <button class="dugme ikincil" data-sec="isaret">İşaret dosyası yükle</button>
+          <button class="dugme ikincil" id="isaretKaldir" hidden>İşaretleri kapat</button>
+        </div>
+      </div>
     </section>
 
     <section class="adim">
       <h2><span class="no">2</span>Ölçüm</h2>
       <p>Mermerin kalınlığını seçin, sonra fotoğrafını yükleyin.</p>
-      <div class="kalinlik" role="radiogroup" aria-label="Mermer kalınlığı">
-        <label><input type="radio" name="kalinlik" value="10"><span>10 mm</span></label>
-        <label><input type="radio" name="kalinlik" value="20" checked><span>20 mm</span></label>
-        <label><input type="radio" name="kalinlik" value="30"><span>30 mm</span></label>
+      <div class="kalinlik-satir">
+        <label class="alan">Kalınlık (mm)
+          <input id="kalinlik" type="number" min="0" step="0.5" value="20" inputmode="decimal">
+        </label>
+        <div class="hizli" role="group" aria-label="Hazır kalınlıklar">
+          <button type="button" data-k="0">0</button><button type="button" data-k="10">10</button><button type="button" data-k="20">20</button><button type="button" data-k="30">30</button>
+        </div>
       </div>
+      <label class="onay">
+        <input type="checkbox" id="tekrenk">
+        <span>Tabla tek renkli
+          <small>Düz, tek renkli yüzeyde (masa, levha) taştan biraz koyu ya da açık nesneleri de bulur. Ahşap tablada kapalı tutun.</small>
+        </span>
+      </label>
       <label class="onay">
         <input type="checkbox" id="referans">
         <span>Boş tabla fotoğrafıyla karşılaştır
@@ -241,7 +282,7 @@
     return e;
   };
   const sayi = (v, hane = 0) => v.toLocaleString("tr-TR", { minimumFractionDigits: hane, maximumFractionDigits: hane, useGrouping: false });
-  const SEKIL = { Dikdortgen: "dikdörtgen", Kare: "kare", Ucgen: "üçgen", Cokgen: "çokgen" };
+  const SEKIL = { Dikdortgen: "dikdörtgen", Kare: "kare", Ucgen: "üçgen", Dortgen: "dörtgen", Cokgen: "çokgen" };
 
   let durum = { kurulu: false };
   let sonOlcum = null;      // son olcum yaniti
@@ -277,7 +318,8 @@
     f.append("koseler", durum.koseler.map(k => k.join(",")).join(";"));
     f.append("uzunluk", $("uzunluk").value);
     f.append("genislik", $("genislik").value);
-    try { durum = await istek("/api/koseler", f); hata(""); durumYaz(); if (sonFoto) olc(sonFoto, false); }
+    f.append("incelt", "1");
+    try { durum = await istek("/api/koseler", f); hata(""); ciz(); if (sonFoto) olc(sonFoto, false); }
     catch (e) { hata(e.message); }
   }
 
@@ -285,8 +327,9 @@
     hata("");
     const f = new FormData();
     f.append("dosya", dosya);
-    f.append("kalinlik", document.querySelector("input[name=kalinlik]:checked").value);
+    f.append("kalinlik", String(Math.max(0, parseFloat(String($("kalinlik").value).replace(",", ".")) || 0)));
     f.append("referans", $("referans").checked ? "1" : "0");
+    f.append("tekrenk", $("tekrenk").checked ? "1" : "0");
     $("sahne").classList.add("calisiyor");
     try {
       sonOlcum = await istek("/api/olc", f);
@@ -315,6 +358,12 @@
         (durum.tutarlilik != null ? `, kamera tutarlılığı <b>${sayi(durum.tutarlilik, 2)}</b>` : "");
       $("uzunluk").value = durum.tabla.uzunluk; $("genislik").value = durum.tabla.genislik;
     }
+    const isd = $("isaretDurum");
+    if (durum.isaretli) {
+      isd.textContent = `Açık: ${durum.isaretli.sayi} işaret (numaralar ${[...durum.isaretli.numaralar].join(", ")}). Kalibrasyon her fotoğrafta yeniden hesaplanır.`;
+      isd.className = "acik";
+    } else { isd.textContent = "Kapalı. Kamera oynarsa ölçüm kayar."; isd.className = ""; }
+    $("isaretKaldir").hidden = !durum.isaretli;
     $("olcDugme").disabled = $("olcOrnek").disabled = !durum.kurulu;
     $("sekmeOlcum").disabled = !sonOlcum;
     $("sekmeKamera").setAttribute("aria-selected", gorunum === "kamera");
@@ -326,7 +375,24 @@
     const tuval = $("tuval");
     if (!durum.kurulu) { $("ipucu").textContent = ""; return; }
     if (gorunum === "olcum" && sonOlcum) { tuval.replaceChildren(olcumCiz()); $("ipucu").textContent = "Koordinatlar 0 noktasına göre milimetre. Sarı etiketler kenar uzunluğudur."; }
-    else { tuval.replaceChildren(kameraCiz()); $("ipucu").textContent = "Sarı çerçeve tablanın kenarlarına oturmalı. Oturmuyorsa köşe noktalarını sürükleyin; değişiklik bırakınca kaydedilir."; }
+    else if (!durum.koseler) {
+      const k = document.createElement("div"); k.className = "bos";
+      k.innerHTML = "<h2>İşaretli mod</h2><p>Kalibrasyon her ölçüm fotoğrafındaki konum işaretlerinden hesaplanır; boş tabla kurulumu gerekmez. Mermerin kalınlığını seçip fotoğrafını yükleyin.</p>";
+      tuval.replaceChildren(k); $("ipucu").textContent = "";
+    }
+    else { tuval.replaceChildren(kameraCiz()); $("ipucu").textContent = durum.isaretli
+      ? "İşaretli mod açık: ölçümde bu köşeler değil, fotoğraftaki işaretler kullanılır. Bu görüntü yalnızca boş tabla karşılaştırması içindir."
+      : "Sarı çerçeve tablanın kenarlarına oturmalı. Oturmuyorsa köşe noktalarını sürükleyin; değişiklik bırakınca kaydedilir."; }
+  }
+
+  async function isaretYukle(dosya) {
+    hata("");
+    const f = new FormData(); f.append("dosya", dosya);
+    try { durum = await istek("/api/isaretler", f); sonOlcum = null; $("sonuc").replaceChildren(); gorunum = "kamera"; ciz(); }
+    catch (e) { hata(e.message); }
+  }
+  async function isaretKaldir() {
+    try { durum = await istek("/api/isaretler/kaldir", new FormData()); ciz(); } catch (e) { hata(e.message); }
   }
 
   // Kamera fotografi + suruklenebilir dort kose
@@ -411,6 +477,11 @@
     sonOlcum.parcalar.forEach((p, pi) => {
       const k = p.koseler, n = k.length;
       const pts = k.map(v => `${v[0]},${Y(v[1])}`).join(" ");
+      if (!p.guvenilir) {
+        // Mermer gibi gorunmeyen nesne: yalnizca kesik cizgili sinir, olcu etiketi yok
+        svg.append(el("polygon", { class: "nesne-cizgi", points: pts, "stroke-width": b * 0.3, "stroke-dasharray": `${b * 1.2} ${b * 0.9}` }));
+        return;
+      }
       svg.append(el("polygon", { class: "parca-golge", points: pts, "stroke-width": b * 0.75 }));
       svg.append(el("polygon", { class: "parca-cizgi", points: pts, "stroke-width": b * 0.35 }));
       const mx = k.reduce((s, v) => s + v[0], 0) / n, my = k.reduce((s, v) => s + v[1], 0) / n;
@@ -439,18 +510,50 @@
   function sonucYaz() {
     const kutu = $("sonuc"); kutu.replaceChildren();
     if (!sonOlcum) return;
-    if (!sonOlcum.parcalar.length) {
-      const d = document.createElement("div"); d.className = "parca";
-      d.innerHTML = "<h3>Parça bulunamadı</h3><p class='ek'>Tabla boş görünüyor. Taş tahta rengine yakınsa “Boş tabla fotoğrafıyla karşılaştır” seçeneğini açıp yeniden deneyin.</p>";
-      kutu.append(d); return;
+    if (sonOlcum.isaretler) {
+      const s = sonOlcum.isaretler, p = document.createElement("p"); p.className = "isaret-bilgi parca";
+      p.textContent = `Kalibrasyon bu fotoğraftaki ${s.kullanilan.length} işaretten hesaplandı (uyum ortalama ${sayi(s.ortalamaMm, 1)} mm, en kötü ${sayi(s.enKotuMm, 1)} mm).` +
+        (s.gorunmeyen.length ? ` Görünmeyen: ${s.gorunmeyen.join(", ")}.` : "") +
+        (s.atilan.length ? ` Diğerleriyle uyuşmadığı için kullanılmayan: ${s.atilan.join(", ")}; yerinden oynamış olabilir.` : "");
+      kutu.append(p);
     }
-    sonOlcum.parcalar.forEach((p, pi) => {
+    if (sonOlcum.tablaYenidenBulundu) {
+      const p = document.createElement("p"); p.className = "isaret-bilgi parca";
+      p.textContent = "Kamera kurulumdaki yerinde değildi; tabla bu fotoğrafta yeniden bulundu ve ölçüm bu köşelerle yapıldı. Sonuç beklenmedik görünürse Kamera görüntüsü sekmesinde köşeleri kontrol edin.";
+      kutu.append(p);
+    }
+    if (sonOlcum.kameraOynamis) {
+      const u = document.createElement("div"); u.className = "uyari";
+      u.innerHTML = "<h3>Kamera kurulumdaki yerinde değil</h3><p>Tablanın kenarları bu fotoğrafta kurulumda bulunan yerlerde görünmüyor" +
+        (sonOlcum.kenarGorunurlugu != null ? ` (kenarların yalnızca %${sayi(sonOlcum.kenarGorunurlugu * 100)}'i yerinde)` : "") +
+        ". Koordinatlar bu yüzden kayar. Kamera oynadıysa kurulumu yenileyin; boş tabla fotoğrafı ile ölçüm fotoğrafı aynı sabit kameradan çekilmeli.</p>";
+      kutu.append(u);
+    }
+    const guvenilir = sonOlcum.parcalar.filter(p => p.guvenilir);
+    const digerleri = sonOlcum.parcalar.filter(p => !p.guvenilir);
+    if (!guvenilir.length) {
+      const d = document.createElement("div"); d.className = "parca";
+      d.innerHTML = "<h3>Mermer bulunamadı</h3><p class='ek'>" + (digerleri.length
+        ? "Tablada nesneler var ama hiçbiri düz kenarlı bir plakaya benzemiyor."
+        : "Tabla boş görünüyor. Taş tahta rengine yakınsa “Boş tabla fotoğrafıyla karşılaştır” seçeneğini açıp yeniden deneyin.") + "</p>";
+      kutu.append(d);
+    }
+    if (digerleri.length) {
+      const d = document.createElement("div"); d.className = "parca nesneler";
+      d.innerHTML = `<h3>Ölçülmeyen nesneler: ${digerleri.length}</h3><p class="ek">Görüntüde kesik çizgiyle gösterildi. Şekilleri düz kenarlı bir plakaya uymadığı için (alet, makine parçası, kısmen görünen taş) köşe verilmedi.</p>` +
+        "<ul>" + digerleri.map(p => `<li>${sayi(p.alanCm2 / 10000, 2)} m²: ${(p.not || "").replace("Mermer gibi gorunmuyor: ", "")
+          .replace("kenarlari kesisiyor", "kenarları kesişiyor").replace("sekli girintili cikintili", "şekli girintili çıkıntılı")
+          .replace("kenarlari duz degil", "kenarları düz değil").replace(" kose", " köşe")}</li>`).join("") + "</ul>";
+      kutu.append(d);
+    }
+    guvenilir.forEach((p) => {
+      const pi = sonOlcum.parcalar.indexOf(p);
       const d = document.createElement("div"); d.className = "parca";
       const dortgen = p.koseler.length === 4;
       const boyut = dortgen
         ? `${sayi((p.kenarlar[0] + p.kenarlar[2]) / 2)} × ${sayi((p.kenarlar[1] + p.kenarlar[3]) / 2)} <small>mm</small>`
         : `${sayi(p.alanCm2 / 10000, 2)} <small>m²</small>`;
-      d.innerHTML = `<h3>Parça ${pi + 1}, ${SEKIL[p.sekil] || p.sekil}</h3>
+      d.innerHTML = `<h3>Parça ${pi + 1}, ${SEKIL[p.sekil] || p.sekil}${p.yontem === "kenar" ? " <small class=\"yontem\">kenarlarından bulundu</small>" : ""}</h3>
         <div class="boyut">${boyut}</div>
         <p class="ek">Alan ${sayi(p.alanCm2 / 10000, 2)} m², dönme ${sayi(p.donme, 1)}°, kalınlık ${sayi(sonOlcum.kalinlik)} mm</p>
         <table><thead><tr><th>Köşe</th><th>X (mm)</th><th>Y (mm)</th></tr></thead><tbody>${
@@ -474,10 +577,21 @@
   }
 
   // ---------- olaylar ----------
-  document.querySelectorAll("[data-sec]").forEach(d => d.onclick = () => { bekleyen = d.dataset.sec; $("dosya").value = ""; $("dosya").click(); });
+  document.querySelectorAll("[data-sec]").forEach(d => d.onclick = () => {
+    bekleyen = d.dataset.sec; $("dosya").value = "";
+    $("dosya").accept = bekleyen === "isaret" ? ".txt,text/plain" : "image/*";
+    $("dosya").click();
+  });
+  $("isaretKaldir").onclick = isaretKaldir;
   document.querySelectorAll("[data-ornek]").forEach(d => d.onclick = () => ornek(d.dataset.ornek));
-  $("dosya").onchange = e => { const f = e.target.files[0]; if (!f) return; bekleyen === "kur" ? kur(f) : olc(f); };
-  document.querySelectorAll("input[name=kalinlik]").forEach(r => r.onchange = () => sonFoto && olc(sonFoto, false));
+  $("dosya").onchange = e => { const f = e.target.files[0]; if (!f) return; bekleyen === "kur" ? kur(f) : bekleyen === "isaret" ? isaretYukle(f) : olc(f); };
+  const kalinlikDegisti = () => {
+    document.querySelectorAll(".hizli button").forEach(b => b.setAttribute("aria-pressed", b.dataset.k === String(parseFloat($("kalinlik").value))));
+    clearTimeout(kalinlikDegisti.t); kalinlikDegisti.t = setTimeout(() => sonFoto && olc(sonFoto, false), 400);
+  };
+  $("kalinlik").oninput = kalinlikDegisti;
+  document.querySelectorAll(".hizli button").forEach(b => b.onclick = () => { $("kalinlik").value = b.dataset.k; kalinlikDegisti(); });
+  kalinlikDegisti();
   $("referans").onchange = () => sonFoto && olc(sonFoto, false);
   $("uzunluk").onchange = $("genislik").onchange = () => durum.kurulu && koseleriKaydet();
   $("sekmeKamera").onclick = () => { gorunum = "kamera"; ciz(); };

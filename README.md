@@ -32,7 +32,7 @@ Sonra tarayıcıda http://localhost:5080 adresini açın. Önce boş tabla foto�
 
 ## Ölçüler
 - Tabla 3300 × 2000 mm (gerçek ölçü).
-- Mermer kalınlığı parçaya göre değişir (10–30 mm); Demo'da sayısal argüman olarak verilir, verilmezse 20 mm (`TableCalibration.SlabThicknessMm`).
+- Mermer kalınlığı parçaya göre değişir (0 ve üstü, serbest sayı); Demo'da sayısal argüman olarak verilir, verilmezse 20 mm (`TableCalibration.SlabThicknessMm`).
 
 ## Varsayımlar (güncellenecek)
 - Kurulumdan sonra `kalibrasyon_onizleme.jpg` gözle kontrol edilmeli; kamera yerinden oynarsa kurulum tekrarlanır.

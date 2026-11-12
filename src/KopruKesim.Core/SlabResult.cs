@@ -18,6 +18,15 @@ namespace KopruKesim.Core
         public double MinX, MaxX, MinY, MaxY;
         /// <summary>En uzun kenarin X eksenine gore acisi (derece, -90..+90). Mermerin tabladaki donuklugu.</summary>
         public double RotationDeg;
+        /// <summary>
+        /// Sekil duz kenarli bir plakaya uyuyorsa true. False ise nesne buyuk olasilikla mermer degil
+        /// (alet, makine parcasi, ust uste yigin); koseleri olcu olarak kullanilmamalidir.
+        /// </summary>
+        public bool IsReliable = true;
+        /// <summary>IsReliable false ise nedeni (kullaniciya gosterilebilir, Turkce).</summary>
+        public string Note;
+        /// <summary>Parcayi bulan yontem: "renk" (renk/parlaklik farki) ya da "kenar" (duz kenarlar).</summary>
+        public string Method;
     }
 
     public sealed class LocatorOptions
