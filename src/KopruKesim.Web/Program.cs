@@ -107,7 +107,7 @@ app.MapPost("/api/kur", async (HttpRequest req) =>
     {
         using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
         if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
-        Point2[] corners = TableFinder.FindCorners(frame);
+        Point2[] corners = TableFinder.FindCorners(frame, length, width);
         bool found = corners != null;
         if (!found)
         {
