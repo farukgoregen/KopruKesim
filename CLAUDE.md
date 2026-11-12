@@ -12,10 +12,11 @@ Kamera fotoğrafından tablaya konan mermerin köşe koordinatlarını (mm) bula
 - `src/KopruKesim.Demo` (konsol): `kur bos.jpg [--uzunluk --genislik --koseler ... --incelt N]`, `olc foto.jpg [kalinlik] [--kal --isaret --referanssiz --parlaklik --kenar-yontemi ...]`, `isaret-uret klasor`.
 - `src/KopruKesim.Web`: yerel arayüz, `baslat.bat` ya da `dotnet run --project src/KopruKesim.Web --urls http://localhost:5080`. Kalibrasyon `veri/` içinde (git dışı).
 - `tests/KopruKesim.Tests`: `dotnet run --project tests/KopruKesim.Tests`.
-- `ornek/`: deneme görselleri; `masa/kutulu.jpg` gerçek ölçülü (Klemsan kutusu 290×127×45 mm). `bos_tabla*.webp` ve `mermer.webp` hazırlanmış görseller, gerçek kamera değil.
+- `ornek/`: deneme görselleri; `masa/kutulu.jpg` gerçek ölçülü (Klemsan kutusu 290×127×45 mm), `masa/plakali*.jpg` (plaka 330×205×4 mm). `bos_tabla*.webp` ve `mermer.webp` hazırlanmış görseller, gerçek kamera değil.
 - Hata ayıklama: `KK_DEBUG=1`.
 
 ## Ölçüm akışı (özet)
+0. Tek fotoğraf modu (web varsayılanı, `TableMeasure.RunSingle`): kurulum yok; tabla ölçüsü ayardan, tabla her ölçüm fotoğrafında bulunur. Kurulumlu mod ve işaretli mod da duruyor.
 1. Tabla: renk (ahşap) + bölge büyütme (kenar bariyerli) adayları, kenar desteği en yüksek seçilir, `RefineCorners` ile piksel altı oturtma.
 2. Kamera kontrolü: kurulum kenarları yerinde değilse tabla ölçüm fotoğrafında yeniden bulunur; olmazsa uyarı. İşaret dosyası varsa kalibrasyon her fotoğrafta işaretlerden.
 3. Üstten görünüm (ölçek otomatik).
@@ -24,7 +25,7 @@ Kamera fotoğrafından tablaya konan mermerin köşe koordinatlarını (mm) bula
 6. Şekil kontrolü: plakaya benzemeyen nesneler "mermer değil", köşe verilmez.
 
 ## Bilinen durum
-- Gerçek ölçülü kutu: 293×126 mm (gerçek 290×127). Sanal parçalarda ≤5 mm. Boş tablalarda sahte parça yok.
+- Deneme masası 1500×800 mm (teyitli). Gerçek ölçülü nesneler, tek fotoğraf: kutu 290×127×45 → 293×126; plaka 330×205×4 → 330×205 (kırpılmış foto) ve 332×208 (orijinal foto, plaka 90° çevrik). Hata 0–3 mm. Sanal parçalarda ≤5 mm. Boş tablalarda sahte parça yok.
 - Kırpılmış fotoğrafta kamera hesabı (tutarlılık) bozulur, kalınlık düzeltmesi zayıflar.
 - Kenar yöntemi yalnız dörtgen parçalar için. İşaret yüksekliği düzeltmesi ve `--tikla` sınanmadı.
 - Kameraya bakan kenar ±15 mm belirsiz olabilir; SlabLocator bazen 0–1 mm'lik sahte köşe ekliyor.

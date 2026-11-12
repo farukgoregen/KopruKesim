@@ -46,6 +46,37 @@ namespace KopruKesim.Vision
         /// <summary>Fotografta yeniden bulunan tablanin kenarlari en az bu oranda gercek kenar uzerinde olmali.</summary>
         public const double RelocateMinSupport = 0.6;
 
+        /// <summary>
+        /// Tek fotograf modu: ayri bir bos tabla kurulumu yoktur. Tabla olcusu bilinir; tabla bu
+        /// fotografin kendisinde bulunur ve olcum ayni fotografla yapilir. Iki fotograf arasinda kamera
+        /// oynamasi sorunu bu sekilde hic olusmaz. Tabla bulunamazsa Error doldurulur.
+        /// </summary>
+        public static MeasureOutput RunSingle(Mat frame, double lengthMm, double widthMm, DetectorOptions options, double thicknessMm)
+        {
+            var output = new MeasureOutput();
+            Point2[] c = TableFinder.FindCorners(frame, lengthMm, widthMm);
+            if (c == null || TableFinder.EdgeSupport(frame, c).Average() < RelocateMinSupport)
+            {
+                output.Error = "Tabla bu fotografta bulunamadi. Tablanin tamami gorunecek sekilde yeniden cekin.";
+                return output;
+            }
+            var cal = new TableCalibration
+            {
+                TableLengthMm = lengthMm, TableWidthMm = widthMm, SlabThicknessMm = thicknessMm,
+                ImageWidth = frame.Cols, ImageHeight = frame.Rows,
+                CornerOrigin = c[0], CornerYEnd = c[1], CornerFar = c[2], CornerXEnd = c[3]
+            };
+            cal.Build();
+            output.Calibration = cal;
+            using (var detector = new SlabDetector(cal, options))
+            {
+                detector.SetTableColorAuto(frame);
+                output.Slabs = detector.Detect(frame);
+                output.Rectified = detector.Rectify(frame);
+            }
+            return output;
+        }
+
         /// <param name="cal">Kurulum kalibrasyonu (isaret yoksa kullanilir; isaret varsa null olabilir).</param>
         /// <param name="reference">Kurulumdaki bos tabla fotografi; yoksa null.</param>
         /// <param name="layout">Isaret yerlesimi; yoksa null.</param>

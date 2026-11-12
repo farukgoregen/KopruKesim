@@ -247,6 +247,12 @@
         </div>
       </div>
       <label class="onay">
+        <input type="checkbox" id="tekfoto" checked>
+        <span>Tek fotoğraf (kurulum yok)
+          <small>Tabla her ölçüm fotoğrafında yeniden bulunur; yukarıdaki tabla uzunluğu ve genişliği kullanılır. Kamera oynasa da sorun olmaz.</small>
+        </span>
+      </label>
+      <label class="onay">
         <input type="checkbox" id="tekrenk">
         <span>Tabla tek renkli
           <small>Düz, tek renkli yüzeyde (masa, levha) taştan biraz koyu ya da açık nesneleri de bulur. Ahşap tablada kapalı tutun.</small>
@@ -330,6 +336,9 @@
     f.append("kalinlik", String(Math.max(0, parseFloat(String($("kalinlik").value).replace(",", ".")) || 0)));
     f.append("referans", $("referans").checked ? "1" : "0");
     f.append("tekrenk", $("tekrenk").checked ? "1" : "0");
+    f.append("tekfoto", $("tekfoto").checked ? "1" : "0");
+    f.append("uzunluk", $("uzunluk").value);
+    f.append("genislik", $("genislik").value);
     $("sahne").classList.add("calisiyor");
     try {
       sonOlcum = await istek("/api/olc", f);
@@ -364,7 +373,7 @@
       isd.className = "acik";
     } else { isd.textContent = "Kapalı. Kamera oynarsa ölçüm kayar."; isd.className = ""; }
     $("isaretKaldir").hidden = !durum.isaretli;
-    $("olcDugme").disabled = $("olcOrnek").disabled = !durum.kurulu;
+    $("olcDugme").disabled = $("olcOrnek").disabled = !(durum.kurulu || $("tekfoto").checked);
     $("sekmeOlcum").disabled = !sonOlcum;
     $("sekmeKamera").setAttribute("aria-selected", gorunum === "kamera");
     $("sekmeOlcum").setAttribute("aria-selected", gorunum === "olcum");
@@ -373,6 +382,12 @@
   function ciz() {
     durumYaz();
     const tuval = $("tuval");
+    if (gorunum === "kamera" && sonOlcum && sonOlcum.tekFoto) {
+      tuval.replaceChildren(tekFotoCiz());
+      $("ipucu").textContent = "Tabla bu fotoğrafta bulundu. Sarı çerçeve tablanın kenarlarına oturmuyorsa ölçüm yanlıştır; tablanın tamamı görünecek şekilde yeniden çekin.";
+      return;
+    }
+    if (gorunum === "olcum" && sonOlcum) { tuval.replaceChildren(olcumCiz()); $("ipucu").textContent = "Koordinatlar 0 noktasına göre milimetre. Sarı etiketler kenar uzunluğudur."; return; }
     if (!durum.kurulu) { $("ipucu").textContent = ""; return; }
     if (gorunum === "olcum" && sonOlcum) { tuval.replaceChildren(olcumCiz()); $("ipucu").textContent = "Koordinatlar 0 noktasına göre milimetre. Sarı etiketler kenar uzunluğudur."; }
     else if (!durum.koseler) {
@@ -396,6 +411,22 @@
   }
 
   // Kamera fotografi + suruklenebilir dort kose
+  // Tek fotograf modunda son olculen fotograf + programin buldugu tabla koseleri (yalniz gosterim)
+  function tekFotoCiz() {
+    const { w, h } = sonOlcum.goruntuBoyutu, b = Math.max(w, h) / 100, k = sonOlcum.tablaKoseleri;
+    const svg = el("svg", { viewBox: `0 0 ${w} ${h}`, role: "img", "aria-label": "Ölçüm fotoğrafı ve bulunan tabla" });
+    if (!tekFotoCiz.url || tekFotoCiz.dosya !== sonFoto) {
+      if (tekFotoCiz.url) URL.revokeObjectURL(tekFotoCiz.url);
+      tekFotoCiz.url = URL.createObjectURL(sonFoto); tekFotoCiz.dosya = sonFoto;
+    }
+    svg.append(el("image", { href: tekFotoCiz.url, width: w, height: h }));
+    svg.append(el("polygon", { class: "cerceve", points: k.map(p => p.join(",")).join(" "), "stroke-width": b * 0.3 }));
+    k.forEach((p, i) => svg.append(el("g", { class: "kose", transform: `translate(${p[0]},${p[1]})` }, el("circle", { r: b * 0.9, "stroke-width": b * 0.25 }))));
+    const t = el("text", { class: "eksen-yazi", x: k[0][0] + b * 2, y: k[0][1] + b * 4, "font-size": b * 3.2, "stroke-width": b * 0.5 }); t.textContent = "0";
+    svg.append(t);
+    return svg;
+  }
+
   function kameraCiz() {
     const { w, h } = durum.goruntu, b = Math.max(w, h) / 100;   // b: cizim birimi
     const svg = el("svg", { viewBox: `0 0 ${w} ${h}`, role: "img", "aria-label": "Kamera görüntüsü ve tabla köşeleri" });
@@ -597,7 +628,17 @@
   $("sekmeKamera").onclick = () => { gorunum = "kamera"; ciz(); };
   $("sekmeOlcum").onclick = () => { if (sonOlcum) { gorunum = "olcum"; ciz(); } };
 
-  istek("/api/durum").then(d => { durum = d; ciz(); }).catch(e => hata(e.message));
+  // Tabla olcusu ve tercihler tarayicida hatirlanir (masa ya da ahsap tabla bir kez girilir)
+  const AYAR = ["uzunluk", "genislik", "tekfoto", "tekrenk"];
+  try {
+    const a = JSON.parse(localStorage.getItem("kopruKesimAyar") || "{}");
+    AYAR.forEach(id => { if (a[id] === undefined) return; const e = $(id); if (e.type === "checkbox") e.checked = a[id]; else e.value = a[id]; });
+  } catch (e) { /* tarayici depolamasi kapali olabilir */ }
+  const ayarKaydet = () => {
+    try { const a = {}; AYAR.forEach(id => { const e = $(id); a[id] = e.type === "checkbox" ? e.checked : e.value; }); localStorage.setItem("kopruKesimAyar", JSON.stringify(a)); } catch (e) { }
+  };
+  AYAR.forEach(id => $(id).addEventListener("change", () => { ayarKaydet(); durumYaz(); }));
+  istek("/api/durum").then(d => { durum = d; ciz(); }).catch(e => { hata(e.message); durumYaz(); });
 })();
 </script>
 </body>

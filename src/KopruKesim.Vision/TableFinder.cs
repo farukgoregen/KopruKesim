@@ -41,10 +41,11 @@ namespace KopruKesim.Vision
             if (wood != null && IsValidQuad(wood, w, h)) candidates.Add(wood);
             // 2) Renkten bagimsiz: goruntu ortasindaki yuzeyi buyut, dortgene oturt, kenarlara incelt
             int snap = Math.Max(8, w / 100);
+            foreach (double seedY in new[] { 0.5, 0.65, 0.8 })
             foreach (bool barrier in new[] { false, true })
             foreach (double tol in new[] { 1.0, 1.5 })
             {
-                Point2[] region = FindByRegion(emptyTableFrame, tol, barrier);
+                Point2[] region = FindByRegion(emptyTableFrame, tol, barrier, seedY);
                 if (region == null) continue;
                 Point2[] refined = RefineCorners(emptyTableFrame, region, snap);
                 if (IsValidQuad(refined, w, h)) candidates.Add(refined);
@@ -67,7 +68,7 @@ namespace KopruKesim.Vision
         /// bolge buyutulur; dortgene sadelestirilir. Tablanin fotografin ortasinda oldugu ve cevresinden
         /// renkce ayrildigi varsayilir. Bolge goruntu kenarina tasarsa (cevreyle karisti) null.
         /// </summary>
-        public static Point2[] FindByRegion(Mat frame, double tolerance, bool edgeBarrier = false)
+        public static Point2[] FindByRegion(Mat frame, double tolerance, bool edgeBarrier = false, double seedY = 0.5)
         {
             double sc = 800.0 / Math.Max(frame.Cols, frame.Rows);
             using (var small = new Mat())
@@ -82,7 +83,7 @@ namespace KopruKesim.Vision
 
                 // Tohum rengi: ortadaki %30'luk bolgenin ortancasi; yayilim: 90. yuzdelik uzaklik
                 var ls = new List<double>(); var a = new List<double>(); var b = new List<double>();
-                for (int y = (int)(hh * 0.35); y < (int)(hh * 0.65); y++)
+                for (int y = (int)(hh * Math.Max(0, seedY - 0.15)); y < (int)(hh * Math.Min(1, seedY + 0.15)); y++)
                     for (int x = (int)(ww * 0.35); x < (int)(ww * 0.65); x++)
                     { Vec3b v = px[y * ww + x]; ls.Add(v.Item0); a.Add(v.Item1); b.Add(v.Item2); }
                 double mL = Median(ls), mA = Median(a), mB = Median(b);
@@ -134,7 +135,7 @@ namespace KopruKesim.Vision
                         // (tam ortada tablanin uzerindeki bir parca olabilir)
                         labels.GetArray(out int[] lbl);
                         var votes = new Dictionary<int, int>();
-                        for (int y = (int)(hh * 0.35); y < (int)(hh * 0.65); y++)
+                        for (int y = (int)(hh * Math.Max(0, seedY - 0.15)); y < (int)(hh * Math.Min(1, seedY + 0.15)); y++)
                             for (int x = (int)(ww * 0.35); x < (int)(ww * 0.65); x++)
                             {
                                 int v = lbl[y * ww + x];

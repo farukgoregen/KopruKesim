@@ -181,12 +181,17 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
     double thickness = double.TryParse(form["kalinlik"], NumberStyles.Float, inv, out double t) && t >= 0 ? t : 20;
     bool useReference = form["referans"] == "1";
     bool uniformTable = form["tekrenk"] == "1";
+    // Tek fotograf: kurulum yok; tabla olcusu formdan, tabla bu fotografta bulunur
+    bool singlePhoto = form["tekfoto"] == "1";
+    double formLength = double.TryParse(form["uzunluk"], NumberStyles.Float, inv, out double fl) && fl > 0 ? fl : 0;
+    double formWidth = double.TryParse(form["genislik"], NumberStyles.Float, inv, out double fw) && fw > 0 ? fw : 0;
     double margin = double.TryParse(form["kenar"], NumberStyles.Float, inv, out double m) ? m : 40;
     lock (gate)
     {
         MarkerLayout layout = LoadLayout();
         TableCalibration cal = File.Exists(calPath) ? TableCalibration.Load(calPath) : null;
-        if (layout == null && cal == null) return Fail("Önce kurulum yapın: boş tablanın fotoğrafını yükleyin ya da işaret yerleşim dosyasını yükleyin.");
+        if (singlePhoto && (formLength <= 0 || formWidth <= 0)) return Fail("Tek fotoğraf modunda tablanın uzunluğunu ve genişliğini girin.");
+        if (!singlePhoto && layout == null && cal == null) return Fail("Önce kurulum yapın ya da tek fotoğraf modunu açın.");
         using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
         if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
 
@@ -200,7 +205,9 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             Locator = new LocatorOptions { SimplifyToleranceMm = 30, MinEdgeMm = 150 }
         };
         using Mat empty = File.Exists(refPath) ? Cv2.ImRead(refPath) : null;
-        using MeasureOutput result = TableMeasure.Run(cal, frame, empty, useReference, options, layout, thickness);
+        using MeasureOutput result = singlePhoto && layout == null
+            ? TableMeasure.RunSingle(frame, formLength, formWidth, options, thickness)
+            : TableMeasure.Run(cal, frame, empty, useReference, options, layout, thickness);
         var isaretler = result.Markers == null ? null : new
         {
             kullanilan = result.Markers.Used,
@@ -218,6 +225,10 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
         {
             tabla = new { uzunluk = used.TableLengthMm, genislik = used.TableWidthMm },
             kalinlik = thickness,
+            tekFoto = singlePhoto && layout == null,
+            goruntuBoyutu = new { w = used.ImageWidth, h = used.ImageHeight },
+            tablaKoseleri = new[] { P(used.CornerOrigin), P(used.CornerYEnd), P(used.CornerFar), P(used.CornerXEnd) },
+            tutarlilik = used.Camera == null ? (double?)null : Math.Round(used.Camera.Consistency, 2),
             referansKullanildi = result.UsedReference,
             isaretler,
             kameraOynamis = result.CameraMoved,
@@ -274,6 +285,7 @@ static string TurkceHata(string m) => m
     .Replace("Bir isaret yerinden oynamis olabilir; daha fazla isaret gorunur olmali.", "Bir işaret yerinden oynamış olabilir; daha fazla işaret görünür olmalı.")
     .Replace("Isaretler gecerli bir kalibrasyon vermiyor (ayni dogru uzerinde olabilirler).", "İşaretler geçerli bir kalibrasyon vermiyor (aynı doğru üzerinde olabilirler).")
     .Replace("Bu fotograf", "Bu fotoğraf").Replace("Ayni kameradan cekilmis bir fotograf yukleyin ya da kurulumu yenileyin.", "Aynı kameradan çekilmiş bir fotoğraf yükleyin ya da kurulumu yenileyin.")
-    .Replace("Kalibrasyon yok: once kurulum yapin.", "Kalibrasyon yok: önce kurulum yapın.");
+    .Replace("Kalibrasyon yok: once kurulum yapin.", "Kalibrasyon yok: önce kurulum yapın.")
+    .Replace("Tabla bu fotografta bulunamadi. Tablanin tamami gorunecek sekilde yeniden cekin.", "Tabla bu fotoğrafta bulunamadı. Tablanın tamamı görünecek şekilde yeniden çekin.");
 
 app.Run();
