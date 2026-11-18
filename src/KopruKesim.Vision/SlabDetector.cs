@@ -19,15 +19,11 @@ namespace KopruKesim.Vision
         public int ColorThreshold = 10;
         /// <summary>Referans goruntusu yokken: parlaklik (Lab L, 0-255) bunun altindaysa koyu tas sayilir.</summary>
         public int DarkThreshold = 60;
-        /// <summary>Referans goruntusu varken: parlaklik farki esigi.</summary>
-        public int BrightnessDiffThreshold = 40;
         /// <summary>
         /// Referans yokken: tablanin ortanca parlakligindan bu kadar farkli bolgeler de parca sayilir.
         /// 0 = kapali. Yalnizca tek renkli, duzgun aydinlatilmis tablada acilmali (ahsap tablada damarlar karisir).
         /// </summary>
         public int NoReferenceBrightnessDiff = 0;
-        /// <summary>Referans goruntusu varken: parlaklik (yari agirlik) + renk toplam farki esigi. 0 = kapali.</summary>
-        public double CombinedDiffThreshold = 16;
         /// <summary>Bundan kucuk lekeler / bosluklar temizlenir (mm).</summary>
         public double CleanupMm = 25;
         /// <summary>Tabla kenarindan bu kadar iceride kalan bolge taranir (mm).</summary>
@@ -61,8 +57,8 @@ namespace KopruKesim.Vision
 
     /// <summary>
     /// Kamera goruntusunden tabla uzerindeki mermerleri bulur.
-    /// Tabla ya bos tabla referans goruntusuyle (onerilen, SetReference) ya da tek bir
-    /// tabla rengiyle (SetTableColor) tanitilir; tabladan farkli gorunen bolgeler mermer adayidir.
+    /// Tabla tek bir tabla rengiyle (SetTableColor / SetTableColorAuto) tanitilir; tabladan farkli
+    /// gorunen bolgeler mermer adayidir.
     /// </summary>
     public sealed class SlabDetector : IDisposable
     {
@@ -73,7 +69,6 @@ namespace KopruKesim.Vision
         /// <summary>Ustten goruntunun kullanilan olcegi (piksel/mm).</summary>
         public readonly double Scale;
         private Mat _referenceLab;
-        private bool _hasRealReference;
 
         public SlabDetector(TableCalibration calibration, DetectorOptions options)
         {
@@ -108,34 +103,6 @@ namespace KopruKesim.Vision
             return rect;
         }
 
-        /// <summary>Bos tablanin goruntusunu referans olarak kaydeder. Isik degisince yenilenmelidir.</summary>
-        public void SetReference(Mat emptyTableFrame)
-        {
-            if (_referenceLab != null) _referenceLab.Dispose();
-            _referenceLab = ToLab(emptyTableFrame);
-            _hasRealReference = true;
-        }
-
-        /// <summary>
-        /// Bos tabla goruntusunu, o goruntunun kendi kalibrasyonuyla (ornek: isaretlerden) ustten
-        /// gorunume cevirip referans yapar. Kamera iki cekim arasinda oynasa da karsilastirma dogru kalir.
-        /// </summary>
-        public void SetReference(Mat emptyTableFrame, TableCalibration emptyCalibration)
-        {
-            double[] h = emptyCalibration.ImageToRectified(Scale).ToArray();
-            using (var warp = new Mat(3, 3, MatType.CV_64FC1))
-            using (var rect = new Mat())
-            {
-                for (int i = 0; i < 9; i++) warp.Set<double>(i / 3, i % 3, h[i]);
-                Cv2.WarpPerspective(emptyTableFrame, rect, warp, _rectSize);
-                if (_referenceLab != null) _referenceLab.Dispose();
-                _referenceLab = new Mat();
-                Cv2.GaussianBlur(rect, _referenceLab, new Size(5, 5), 0);
-                Cv2.CvtColor(_referenceLab, _referenceLab, ColorConversionCodes.BGR2Lab);
-                _hasRealReference = true;
-            }
-        }
-
         /// <summary>
         /// Referans yerine tek bir tabla rengi kullanir: verilen goruntude, bos oldugu bilinen
         /// tabla bolgesinin (mm) ortalama rengini olcer.
@@ -151,7 +118,6 @@ namespace KopruKesim.Vision
                     Scalar mean = Cv2.Mean(part);
                     if (_referenceLab != null) _referenceLab.Dispose();
                     _referenceLab = new Mat(lab.Size(), MatType.CV_8UC3, new Scalar(Math.Round(mean.Val0), Math.Round(mean.Val1), Math.Round(mean.Val2)));
-                    _hasRealReference = false;
                 }
             }
         }
@@ -185,14 +151,13 @@ namespace KopruKesim.Vision
                 finally { foreach (Mat m in ch) m.Dispose(); }
                 if (_referenceLab != null) _referenceLab.Dispose();
                 _referenceLab = new Mat(lab.Size(), MatType.CV_8UC3, new Scalar(median[0], median[1], median[2]));
-                _hasRealReference = false;
             }
         }
 
         /// <summary>Goruntudeki mermerleri bulur; sonuclar buyukten kucuge alan sirasindadir.</summary>
         public List<SlabResult> Detect(Mat frame)
         {
-            if (_referenceLab == null) throw new InvalidOperationException("Once SetReference veya SetTableColor cagrilmali.");
+            if (_referenceLab == null) throw new InvalidOperationException("Once SetTableColor ya da SetTableColorAuto cagrilmali.");
             var results = new List<SlabResult>();
             foreach (Point2[] contour in FindContoursMm(frame))
             {
@@ -345,36 +310,14 @@ namespace KopruKesim.Vision
                     Cv2.Threshold(d[1], mask, _opt.ColorThreshold, 255, ThresholdTypes.Binary);
                     Cv2.Threshold(d[2], tmp, _opt.ColorThreshold, 255, ThresholdTypes.Binary);
                     Cv2.BitwiseOr(mask, tmp, mask);
-                    // Parlaklik: referans varsa fark, yoksa mutlak koyuluk (isik tabla boyunca degistigi icin)
-                    if (_hasRealReference) Cv2.Threshold(d[0], tmp, _opt.BrightnessDiffThreshold, 255, ThresholdTypes.Binary);
-                    else Cv2.Threshold(l[0], tmp, _opt.DarkThreshold, 255, ThresholdTypes.BinaryInv);
+                    // Parlaklik: mutlak koyuluk (isik tabla boyunca degistigi icin)
+                    Cv2.Threshold(l[0], tmp, _opt.DarkThreshold, 255, ThresholdTypes.BinaryInv);
                     Cv2.BitwiseOr(mask, tmp, mask);
-                    // Referanssiz ama tabla tek renkli: tablanin ortanca parlakligindan belirgin farkli bolgeler
-                    if (!_hasRealReference && _opt.NoReferenceBrightnessDiff > 0)
+                    // Tabla tek renkli: tablanin ortanca parlakligindan belirgin farkli bolgeler
+                    if (_opt.NoReferenceBrightnessDiff > 0)
                     {
                         Cv2.Threshold(d[0], tmp, _opt.NoReferenceBrightnessDiff, 255, ThresholdTypes.Binary);
                         Cv2.BitwiseOr(mask, tmp, mask);
-                    }
-                    // Referans varken toplam fark: parlaklik ve renk tek tek esigin altinda kalsa da
-                    // birlikte belirginse yakalanir (ornek: acik ahsap uzerinde beyaz mermer).
-                    if (_hasRealReference && _opt.CombinedDiffThreshold > 0)
-                    {
-                        using (var sum = new Mat())
-                        using (var f = new Mat())
-                        {
-                            d[0].ConvertTo(f, MatType.CV_32F, 0.5);   // parlaklik yari agirlikta (golge/isik oynamasi)
-                            Cv2.Multiply(f, f, sum);
-                            for (int i = 1; i < 3; i++)
-                            {
-                                d[i].ConvertTo(f, MatType.CV_32F);
-                                Cv2.Multiply(f, f, f);
-                                Cv2.Add(sum, f, sum);
-                            }
-                            Cv2.Sqrt(sum, sum);
-                            Cv2.Threshold(sum, f, _opt.CombinedDiffThreshold, 255, ThresholdTypes.Binary);
-                            f.ConvertTo(tmp, MatType.CV_8U);
-                            Cv2.BitwiseOr(mask, tmp, mask);
-                        }
                     }
                 }
                 finally

@@ -14,19 +14,8 @@ namespace KopruKesim.Vision
         public Mat Rectified;
         /// <summary>Bu fotograf icin kullanilan kalibrasyon.</summary>
         public TableCalibration Calibration;
-        /// <summary>Ayirmada bos tabla referansi kullanildi.</summary>
-        public bool UsedReference;
-        /// <summary>Isaret yerlesimi tanimliysa isaretlerden kalibrasyon sonucu; degilse null.</summary>
+        /// <summary>Etiketli olcumde etiketlerden kalibrasyon sonucu; degilse null.</summary>
         public MarkerFit Markers;
-        /// <summary>
-        /// Yalnizca isaret yokken: kalibrasyondaki tabla kenarlari bu fotografta gercek kenarin uzerinde
-        /// degil (kamera kurulumdan farkli konumda). Koordinatlar kayar; kurulum yenilenmeli.
-        /// </summary>
-        public bool CameraMoved;
-        /// <summary>Kamera kurulumdan farkli yerdeydi; tabla bu fotografta yeniden bulundu ve olcum onunla yapildi.</summary>
-        public bool Relocated;
-        /// <summary>Kenarlarin bu fotograftaki / referanstaki gorunurluk orani (bilgi icin).</summary>
-        public double EdgeRatio = double.NaN;
         /// <summary>Olcum yapilamadiysa nedeni (Turkce). Doluysa Slabs bostur.</summary>
         public string Error;
         /// <summary>Tek fotografta bulunan tablanin kenar destegi (0-1); kose guvenilirligi icin.</summary>
@@ -38,16 +27,13 @@ namespace KopruKesim.Vision
     }
 
     /// <summary>
-    /// Olcum akisi. Isaret yerlesimi varsa kalibrasyon HER fotografta isaretlerden yeniden hesaplanir;
-    /// kamera oynasa da olcum kaymaz, yeterli isaret yoksa olcum verilmez. Isaret yoksa kurulumdaki
-    /// kalibrasyon kullanilir ve kameranin yerinde olup olmadigi tabla kenarlarindan denetlenir.
-    /// Web ve konsol ayni akisi kullanir.
+    /// Olcum akisi. Kalibrasyon her fotografin kendisinden kurulur: ya tablanin dort kosesindeki dama
+    /// etiketlerinden (RunWithTags) ya da tabla koselerinden (otomatik: RunSingle, elle: RunWithCorners,
+    /// kayitli tabladan: RunWithProfile). Kamera fotograftan fotografa yer degistirebilir.
     /// </summary>
     public static class TableMeasure
     {
-        /// <summary>Kenar gorunurlugu referansin bu oraninin altina duserse kamera oynamis sayilir.</summary>
-        public const double MovedRatio = 0.6;
-        /// <summary>Fotografta yeniden bulunan tablanin kenarlari en az bu oranda gercek kenar uzerinde olmali.</summary>
+        /// <summary>Fotografta bulunan tablanin kenarlari en az bu oranda gercek kenar uzerinde olmali.</summary>
         public const double RelocateMinSupport = 0.6;
 
         /// <summary>
@@ -159,21 +145,12 @@ namespace KopruKesim.Vision
             return output;
         }
 
-        /// <param name="cal">Kurulum kalibrasyonu (isaret yoksa kullanilir; isaret varsa null olabilir).</param>
-        /// <param name="reference">Kurulumdaki bos tabla fotografi; yoksa null.</param>
-        /// <param name="layout">Isaret yerlesimi; yoksa null.</param>
         /// <summary>
         /// Etiketlerin kendisi (beyaz sayfa, dama tahtasi) olcum sonucuna parca olarak girmesin: merkezi bir
         /// etiketin kapladigi alanin icinde kalan parcalar atilir.
         /// </summary>
         private static void RemoveTags(List<SlabResult> slabs, MarkerLayout layout)
         {
-            if (layout.Kind != "dama")
-            {
-                double h = layout.MarkerSizeMm * 0.8;
-                slabs.RemoveAll(s => layout.Markers.Any(m => Math.Abs(s.Centroid.X - m.X) < h && Math.Abs(s.Centroid.Y - m.Y) < h));
-                return;
-            }
             // Dama etiketi tabla kosesine dayali: kosesinden merkezine olan uzakligin iki kati etiketin kendisi.
             // Etiketin kareleri, kenari ya da yanindaki tabla disi bolgeyle birlesen leke etiket alanina tasar;
             // kosesinin cogu (ya da agirlik merkezi) etiket alaninda kalan parca etikettir.
@@ -194,107 +171,41 @@ namespace KopruKesim.Vision
             });
         }
 
-        /// <summary>Etiket turune gore etiket merkezleri: numarali kare kodlar ya da koselerdeki dama tahtalari.</summary>
-        private static Dictionary<int, Point2> FindTags(Mat image, MarkerLayout layout, out Dictionary<int, Point2[]> corners)
-        {
-            corners = null;
-            return layout.Kind == "dama"
-                ? CheckerFinder.Find(image, layout.PatternCols, layout.PatternRows, out corners)
-                : MarkerFinder.Find(image);
-        }
-
-        /// <summary>Etiketleri bulur, merkezlerden kalibrasyonu hesaplar; dama etiketinde tum ic koselerle inceltir.</summary>
+        /// <summary>Koselerdeki dama etiketlerini bulur, merkezlerden kalibrasyonu hesaplar, tum ic koselerle inceltir.</summary>
         private static MarkerFit SolveTags(Mat image, MarkerLayout layout, out int found)
         {
             Dictionary<int, Point2[]> corners;
-            Dictionary<int, Point2> tags = FindTags(image, layout, out corners);
+            Dictionary<int, Point2> tags = CheckerFinder.Find(image, layout.PatternCols, layout.PatternRows, out corners);
             found = tags.Count;
             MarkerFit fit = MarkerSolver.Solve(layout, tags, image.Cols, image.Rows);
-            if (fit.Calibration != null && layout.Kind == "dama") CheckerGridFit.Refine(layout, fit, corners, image.Cols, image.Rows);
+            if (fit.Calibration != null) CheckerGridFit.Refine(layout, fit, corners, image.Cols, image.Rows);
             return fit;
         }
 
-        public static MeasureOutput Run(TableCalibration cal, Mat frame, Mat reference, bool compareWithReference,
-            DetectorOptions options, MarkerLayout layout = null, double thicknessMm = double.NaN)
+        /// <summary>
+        /// Dama etiketli olcum: kalibrasyon bu fotograftaki etiketlerden hesaplanir (tum ic koselerle
+        /// inceltilir). Yeterli etiket yoksa Error doludur.
+        /// </summary>
+        public static MeasureOutput RunWithTags(Mat frame, MarkerLayout layout, DetectorOptions options, double thicknessMm)
         {
             var output = new MeasureOutput();
-            bool refUsable = reference != null && !reference.Empty();
-            TableCalibration refCal = null;
-
-            if (layout != null)
+            int found;
+            output.Markers = SolveTags(frame, layout, out found);
+            if (output.Markers.Calibration == null)
             {
-                int found;
-                output.Markers = SolveTags(frame, layout, out found);
-                if (output.Markers.Calibration == null)
-                {
-                    // Dama etiketleri dortten azsa numarasiz doner; iletide gercekten bulunan sayi yazsin
-                    output.Error = layout.Kind == "dama" && found < MarkerSolver.MinMarkers
-                        ? string.Format("Yeterli isaret gorunmuyor: {0} bulundu, en az {1} gerekli.", found, MarkerSolver.MinMarkers)
-                        : output.Markers.Error;
-                    return output;
-                }
-                output.Calibration = output.Markers.Calibration;
-                if (refUsable)
-                {
-                    MarkerFit rf = SolveTags(reference, layout, out found);
-                    refCal = rf.Calibration;   // bos tabla fotografinda isaretler yoksa karsilastirma yapilmaz
-                }
+                // Dama etiketleri dortten azsa numarasiz doner; iletide gercekten bulunan sayi yazsin
+                output.Error = found < MarkerSolver.MinMarkers
+                    ? string.Format("Yeterli isaret gorunmuyor: {0} bulundu, en az {1} gerekli.", found, MarkerSolver.MinMarkers)
+                    : output.Markers.Error;
+                return output;
             }
-            else
-            {
-                if (cal == null) { output.Error = "Kalibrasyon yok: once kurulum yapin."; return output; }
-                if (frame.Cols != cal.ImageWidth || frame.Rows != cal.ImageHeight)
-                {
-                    output.Error = string.Format("Bu fotograf {0}x{1} piksel, kurulum ise {2}x{3}. Ayni kameradan cekilmis bir fotograf yukleyin ya da kurulumu yenileyin.",
-                        frame.Cols, frame.Rows, cal.ImageWidth, cal.ImageHeight);
-                    return output;
-                }
-                output.Calibration = cal;
-                if (refUsable && reference.Cols == frame.Cols && reference.Rows == frame.Rows)
-                {
-                    // Tabla kenari parcalarla kismen ortulebilir; referansta iyi gorunen kenarlarin toplam destegi karsilastirilir
-                    var corners = new[] { cal.CornerOrigin, cal.CornerYEnd, cal.CornerFar, cal.CornerXEnd };
-                    double[] sr = TableFinder.EdgeSupport(reference, corners);
-                    double[] sc = TableFinder.EdgeSupport(frame, corners);
-                    double a = 0, b = 0;
-                    for (int i = 0; i < 4; i++) if (sr[i] >= 0.4) { a += sr[i]; b += sc[i]; }
-                    if (a > 0)
-                    {
-                        output.EdgeRatio = b / a;
-                        output.CameraMoved = output.EdgeRatio < MovedRatio;
-                    }
-                    if (!output.CameraMoved) refCal = cal;
-                }
-                if (output.CameraMoved)
-                {
-                    // Kamera kurulumdan farkli yerde: tablayi bu fotografta yeniden bul. Tabla her fotografta
-                    // gorundugu surece kamera oynasa da olcum kaymaz. Bulunamazsa uyari kalir.
-                    Point2[] c = TableFinder.FindCorners(frame, cal.TableLengthMm, cal.TableWidthMm);
-                    if (c != null && TableFinder.EdgeSupport(frame, c).Average() >= RelocateMinSupport)
-                    {
-                        var moved = new TableCalibration
-                        {
-                            TableLengthMm = cal.TableLengthMm, TableWidthMm = cal.TableWidthMm,
-                            SlabThicknessMm = cal.SlabThicknessMm, ManualCamera = cal.ManualCamera,
-                            ImageWidth = frame.Cols, ImageHeight = frame.Rows,
-                            CornerOrigin = c[0], CornerYEnd = c[1], CornerFar = c[2], CornerXEnd = c[3]
-                        };
-                        moved.Build();
-                        output.Calibration = moved;
-                        output.Relocated = true;
-                        output.CameraMoved = false;
-                        refCal = cal;   // bos tabla fotografi kendi (kurulum) kalibrasyonuyla ustten gorunume cevrilir
-                    }
-                }
-            }
-
-            if (!double.IsNaN(thicknessMm)) output.Calibration.SlabThicknessMm = thicknessMm;
+            output.Calibration = output.Markers.Calibration;
+            output.Calibration.SlabThicknessMm = thicknessMm;
             using (var detector = new SlabDetector(output.Calibration, options))
             {
-                if (compareWithReference && refCal != null) { detector.SetReference(reference, refCal); output.UsedReference = true; }
-                else detector.SetTableColorAuto(frame);
+                detector.SetTableColorAuto(frame);
                 output.Slabs = detector.Detect(frame);
-                if (layout != null) RemoveTags(output.Slabs, layout);
+                RemoveTags(output.Slabs, layout);
                 output.Rectified = detector.Rectify(frame);
             }
             return output;

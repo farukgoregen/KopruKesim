@@ -61,7 +61,6 @@
   .modlar label:last-child span { border-radius: 0 4px 4px 0; }
   .modlar input:checked + span { background: var(--murekkep); color: var(--serit); border-color: var(--murekkep); }
   .modlar input:focus-visible + span { outline: 3px solid var(--serit); outline-offset: 2px; position: relative; }
-  .mod-aciklama { margin: 0 0 12px; color: var(--soluk); font-size: 14px; }
   .grup { padding: 12px 0 14px; border-top: 1px solid var(--cizgi); }
   .grup h2 { margin: 0 0 8px; font: 600 21px/1.1 var(--baslik); }
   .grup .satir { margin-bottom: 8px; }
@@ -72,7 +71,6 @@
   .canli-ayar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
   .canli-ayar .onay { margin: 4px 0; }
   .baglanti { border: 0; background: none; padding: 6px 0 0; color: var(--yesil-koyu); text-decoration: underline; cursor: pointer; font-size: 14.5px; }
-  [data-mod][hidden] { display: none !important; }
 
   /* Sahne */
   .sahne { padding: 20px 24px 24px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
@@ -334,12 +332,6 @@
       </div>
     </div>
 
-    <!-- Eski modlarin alanlari: arayuzde gorunmez, kod basitligi icin duruyor -->
-    <div hidden>
-      <input type="checkbox" id="tekfoto"><input type="checkbox" id="referans">
-      <p id="isaretDurum"></p><button id="isaretKaldir"></button><button id="olcOrnek" data-ornek="mermer"></button>
-      <button data-sec="kur"></button><button data-sec="isaret"></button><p id="modAciklama"></p>
-    </div>
   </section>
 
   <main class="sahne" id="sahne">
@@ -385,10 +377,8 @@
   const sayi = (v, hane = 0) => v.toLocaleString("tr-TR", { minimumFractionDigits: hane, maximumFractionDigits: hane, useGrouping: false });
   const SEKIL = { Dikdortgen: "dikdörtgen", Kare: "kare", Ucgen: "üçgen", Dortgen: "dörtgen", Cokgen: "çokgen" };
 
-  let durum = { kurulu: false };
   let sonOlcum = null;      // son olcum yaniti
   let sonFoto = null;       // son olculen fotograf (kalinlik degisince yeniden olcmek icin)
-  let bekleyen = null;      // dosya secici hangi is icin acildi: "kur" | "olc"
   let gorunum = "kamera";
   let elleKoseler = null;   // son fotograf icin elle duzeltilmis tabla koseleri (damasiz; iki kose modunda tahmin)
   let elleKosegen = null;   // elle yerlestirilen sol ust ve sag alt kose; diger ikisi sunucuda kenarlardan bulunur
@@ -402,39 +392,13 @@
   }
   function hata(mesaj) { const h = $("hata"); h.textContent = mesaj || ""; h.hidden = !mesaj; }
 
-  async function kur(dosya) {
-    hata("");
-    const f = new FormData();
-    f.append("dosya", dosya);
-    f.append("uzunluk", $("uzunluk").value);
-    f.append("genislik", $("genislik").value);
-    try {
-      const y = await istek("/api/kur", f);
-      durum = y.durum; sonOlcum = null; sonFoto = null; $("sonuc").replaceChildren();
-      gorunum = "kamera"; ciz();
-      if (!y.otomatikBulundu) hata("Tabla köşeleri otomatik bulunamadı. Sarı noktaları tablanın dört köşesine sürükleyin.");
-    } catch (e) { hata(e.message); }
-  }
-
-  async function koseleriKaydet() {
-    const f = new FormData();
-    f.append("koseler", durum.koseler.map(k => k.join(",")).join(";"));
-    f.append("uzunluk", $("uzunluk").value);
-    f.append("genislik", $("genislik").value);
-    f.append("incelt", "1");
-    try { durum = await istek("/api/koseler", f); hata(""); ciz(); if (sonFoto) olc(sonFoto, false); }
-    catch (e) { hata(e.message); }
-  }
-
   function olcumFormu(dosya) {
     const f = new FormData();
     f.append("dosya", dosya);
     f.append("kalinlik", String(Math.max(0, parseFloat(String($("kalinlik").value).replace(",", ".")) || 0)));
-    f.append("referans", $("referans").checked ? "1" : "0");
     f.append("tekrenk", $("tekrenk").checked ? "1" : "0");
-    // Damasiz: tabla koseleri fotograftaki tablanin kenarlarindan bulunur (tek fotograf modu)
+    // Damasiz: tabla koseleri fotograftan bulunur (otomatik, elle ya da kayitli tabladan)
     const damasiz = yontem() === "damasiz";
-    f.append("tekfoto", damasiz ? "1" : "0");
     f.append("dama", damasiz ? "" : document.querySelector('input[name="dama"]:checked').value);
     f.append("uzunluk", $("uzunluk").value);
     f.append("genislik", $("genislik").value);
@@ -461,15 +425,6 @@
       if (window.matchMedia("(max-width: 900px)").matches) $("sahne").scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (e) { hata(e.message); }
     finally { $("sahne").classList.remove("calisiyor"); }
-  }
-
-  async function ornek(ad) {
-    try {
-      const r = await fetch("/api/ornek/" + ad);
-      if (!r.ok) throw new Error("Örnek görsel bulunamadı.");
-      const dosya = new File([await r.blob()], ad + ".webp", { type: "image/webp" });
-      ad === "bos" ? await kur(dosya) : await olc(dosya);
-    } catch (e) { hata(e.message); }
   }
 
   // ---------- cizim ----------
@@ -512,17 +467,6 @@
     tuval.replaceChildren(bosDurum()); $("ipucu").textContent = "";
   }
 
-  async function isaretYukle(dosya) {
-    hata("");
-    const f = new FormData(); f.append("dosya", dosya);
-    try { durum = await istek("/api/isaretler", f); sonOlcum = null; $("sonuc").replaceChildren(); gorunum = "kamera"; ciz(); }
-    catch (e) { hata(e.message); }
-  }
-  async function isaretKaldir() {
-    try { durum = await istek("/api/isaretler/kaldir", new FormData()); ciz(); } catch (e) { hata(e.message); }
-  }
-
-  // Kamera fotografi + suruklenebilir dort kose
   // Moda gore bos ekran: ne yapilacagini soyler
   function bosDurum() {
     const k = document.createElement("div"); k.className = "bos";
@@ -729,52 +673,6 @@
     catch (e) { hata(e.message); }
   }
 
-  function kameraCiz() {
-    const { w, h } = durum.goruntu, b = Math.max(w, h) / 100;   // b: cizim birimi
-    const svg = el("svg", { viewBox: `0 0 ${w} ${h}`, role: "img", "aria-label": "Kamera görüntüsü ve tabla köşeleri" });
-    svg.append(el("image", { href: "/api/referans?t=" + Date.now(), width: w, height: h }));
-    const cerceve = el("polygon", { class: "cerceve", "stroke-width": b * 0.3 });
-    const etiket = [["0", 0], ["Y", 1], ["X", 3]].map(([yazi, i]) => {
-      const t = el("text", { class: "eksen-yazi", "font-size": b * 3.6, "stroke-width": b * 0.5, "text-anchor": "middle" });
-      t.textContent = yazi; t.dataset.i = i; return t;
-    });
-    const noktalar = durum.koseler.map((_, i) => {
-      const g = el("g", { class: "kose", tabindex: 0, role: "slider", "aria-label": ["0 noktası", "Y sonu", "Uzak köşe", "X sonu"][i] },
-        el("circle", { r: b * 1.1, "stroke-width": b * 0.3 }));
-      g.dataset.i = i; return g;
-    });
-    const yerlestir = () => {
-      const k = durum.koseler;
-      cerceve.setAttribute("points", k.map(p => p.join(",")).join(" "));
-      const orta = [k.reduce((s, p) => s + p[0], 0) / 4, k.reduce((s, p) => s + p[1], 0) / 4];
-      noktalar.forEach((g, i) => g.setAttribute("transform", `translate(${k[i][0]},${k[i][1]})`));
-      etiket.forEach(t => {
-        const p = k[t.dataset.i], dx = orta[0] - p[0], dy = orta[1] - p[1], u = Math.hypot(dx, dy) || 1;
-        t.setAttribute("x", p[0] + dx / u * b * 5); t.setAttribute("y", p[1] + dy / u * b * 5 + b * 1.2);
-      });
-    };
-    svg.append(cerceve, ...etiket, ...noktalar);
-    yerlestir();
-
-    // Surukleme (isaretci) ve ok tuslari
-    let aktif = null;
-    const konum = e => { const m = svg.getScreenCTM().inverse(); const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(m);
-      return [Math.min(w, Math.max(0, +p.x.toFixed(1))), Math.min(h, Math.max(0, +p.y.toFixed(1)))]; };
-    noktalar.forEach(g => {
-      g.addEventListener("pointerdown", e => { aktif = +g.dataset.i; g.setPointerCapture(e.pointerId); e.preventDefault(); });
-      g.addEventListener("pointermove", e => { if (aktif === null) return; durum.koseler[aktif] = konum(e); yerlestir(); });
-      g.addEventListener("pointerup", () => { if (aktif !== null) { aktif = null; koseleriKaydet(); } });
-      g.addEventListener("keydown", e => {
-        const ad = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
-        if (!ad) return; e.preventDefault();
-        const i = +g.dataset.i, c = e.shiftKey ? 10 : 1;
-        durum.koseler[i] = [durum.koseler[i][0] + ad[0] * c, durum.koseler[i][1] + ad[1] * c]; yerlestir();
-        clearTimeout(g._t); g._t = setTimeout(koseleriKaydet, 500);
-      });
-    });
-    return svg;
-  }
-
   // Ustten gorunum: mm cetveli, parcalar, kenar olculeri
   function olcumCiz() {
     const L = sonOlcum.tabla.uzunluk, W = sonOlcum.tabla.genislik;
@@ -860,25 +758,13 @@
       p.textContent = `Canlı: son ${sonOlcum.canliOrtanca.n} ölçümün ortancası ${sayi(sonOlcum.canliOrtanca.a)} × ${sayi(sonOlcum.canliOrtanca.b)} mm (oynama ±${sayi(sonOlcum.canliOrtanca.yayilim)} mm).`;
       kutu.append(p);
     }
-    if (sonOlcum.tablaYenidenBulundu) {
-      const p = document.createElement("p"); p.className = "isaret-bilgi parca";
-      p.textContent = "Kamera kurulumdaki yerinde değildi; tabla bu fotoğrafta yeniden bulundu ve ölçüm bu köşelerle yapıldı. Sonuç beklenmedik görünürse Kamera görüntüsü sekmesinde köşeleri kontrol edin.";
-      kutu.append(p);
-    }
-    if (sonOlcum.kameraOynamis) {
-      const u = document.createElement("div"); u.className = "uyari";
-      u.innerHTML = "<h3>Kamera kurulumdaki yerinde değil</h3><p>Tablanın kenarları bu fotoğrafta kurulumda bulunan yerlerde görünmüyor" +
-        (sonOlcum.kenarGorunurlugu != null ? ` (kenarların yalnızca %${sayi(sonOlcum.kenarGorunurlugu * 100)}'i yerinde)` : "") +
-        ". Koordinatlar bu yüzden kayar. Kamera oynadıysa kurulumu yenileyin; boş tabla fotoğrafı ile ölçüm fotoğrafı aynı sabit kameradan çekilmeli.</p>";
-      kutu.append(u);
-    }
     const guvenilir = sonOlcum.parcalar.filter(p => p.guvenilir);
     const digerleri = sonOlcum.parcalar.filter(p => !p.guvenilir);
     if (!guvenilir.length) {
       const d = document.createElement("div"); d.className = "parca";
       d.innerHTML = "<h3>Mermer bulunamadı</h3><p class='ek'>" + (digerleri.length
         ? "Tablada nesneler var ama hiçbiri düz kenarlı bir plakaya benzemiyor."
-        : "Tabla boş görünüyor. Taş tahta rengine yakınsa “Boş tabla fotoğrafıyla karşılaştır” seçeneğini açıp yeniden deneyin.") + "</p>";
+        : "Tabla boş görünüyor. Taş tabla rengine yakınsa ve tabla tek renkliyse “Yüzey tek renkli” seçeneğini açıp yeniden deneyin.") + "</p>";
       kutu.append(d);
     }
     if (digerleri.length) {
@@ -923,13 +809,9 @@
   $("cekDosya").onchange = e => { const f = e.target.files[0]; if (f) olc(f); e.target.value = ""; };
   document.querySelectorAll("[data-sec]").forEach(d => d.onclick = () => {
     if (d.dataset.sec === "cek") { $("cekDosya").click(); return; }
-    bekleyen = d.dataset.sec; $("dosya").value = "";
-    $("dosya").accept = bekleyen === "isaret" ? ".txt,text/plain" : "image/*";
-    $("dosya").click();
+    $("dosya").value = ""; $("dosya").click();
   });
-  $("isaretKaldir").onclick = isaretKaldir;
-  document.querySelectorAll("[data-ornek]").forEach(d => d.onclick = () => ornek(d.dataset.ornek));
-  $("dosya").onchange = e => { const f = e.target.files[0]; if (!f) return; bekleyen === "kur" ? kur(f) : bekleyen === "isaret" ? isaretYukle(f) : olc(f); };
+  $("dosya").onchange = e => { const f = e.target.files[0]; if (f) olc(f); };
   const kalinlikDegisti = () => {
     document.querySelectorAll(".hizli button").forEach(b => b.setAttribute("aria-pressed", b.dataset.k === String(parseFloat($("kalinlik").value))));
     clearTimeout(kalinlikDegisti.t); kalinlikDegisti.t = setTimeout(() => sonFoto && olc(sonFoto, false), 400);
@@ -937,37 +819,8 @@
   $("kalinlik").oninput = kalinlikDegisti;
   document.querySelectorAll(".hizli button").forEach(b => b.onclick = () => { $("kalinlik").value = b.dataset.k; kalinlikDegisti(); });
   kalinlikDegisti();
-  $("referans").onchange = () => sonFoto && olc(sonFoto, false);
-  // Sunucudaki sabit kamera kurulumunun olcusu yalnizca o modda degistirilir
-  $("uzunluk").onchange = $("genislik").onchange = () => mod === "kurulum" && durum.kurulu && koseleriKaydet();
   $("sekmeKamera").onclick = () => { if (canli.akis) kamerayiKapat(); gorunum = "kamera"; ciz(); };
   $("sekmeOlcum").onclick = () => { if (sonOlcum) { if (canli.akis) kamerayiKapat(); gorunum = "olcum"; ciz(); } };
-
-  // ---------- calisma sekli (mod) ----------
-  let mod = "tek";
-  const MOD_ACIKLAMA = {
-    tek: "Kurulum yok. Tabla her fotoğrafta yeniden bulunur; kamera oynasa da olur.",
-    kurulum: "Kamera sabit. Boş tabla bir kez tanıtılır, sonra yalnızca taş fotoğrafı yüklenir.",
-    isaret: "Makinedeki konum işaretleri her fotoğrafta tablayı tanımlar."
-  };
-  function modUygula(yeni, kaydet = true) {
-    mod = yeni;
-    document.querySelectorAll('input[name="mod"]').forEach(r => r.checked = r.value === mod);
-    $("tekfoto").checked = mod === "tek";
-    // Tek fotograf modunun tabla olcusu kullanicinin kaydettigidir (sabit kamera kurulumunun olcusu ayridir)
-    if (mod === "tek") try {
-      const a = JSON.parse(localStorage.getItem("kopruKesimAyar") || "{}");
-      if (a.uzunluk) $("uzunluk").value = a.uzunluk;
-      if (a.genislik) $("genislik").value = a.genislik;
-    } catch (e) { }
-    $("modAciklama").textContent = MOD_ACIKLAMA[mod];
-    document.querySelectorAll("[data-mod]").forEach(e => e.hidden = !e.dataset.mod.split(" ").includes(mod));
-    if (kaydet) try { localStorage.setItem("kopruKesimMod", mod); } catch (e) { }
-    if (canli.akis) kamerayiKapat();
-    sonOlcum = null; $("sonuc").replaceChildren(); hata("");
-    gorunum = "kamera"; ciz();
-  }
-  document.querySelectorAll('input[name="mod"]').forEach(r => r.onchange = () => modUygula(r.value));
 
   // ---------- canli kamera ----------
   const canli = { akis: null, video: null, svg: null, yazi: null, mesgul: false, zamanlayici: null };
@@ -1139,8 +992,6 @@
     } catch (e) { }
   };
   AYAR.forEach(id => $(id).addEventListener("change", () => { ayarKaydet(); durumYaz(); }));
-  let kayitliMod = "tek";
-  try { kayitliMod = localStorage.getItem("kopruKesimMod") || "tek"; } catch (e) { }
   $("profil").onchange = () => { profilUygula(); if (sonFoto && yontem() === "damasiz") { elleKoseler = null; olc(sonFoto, false); } };
   $("profilSil").onclick = profilSil;
   $("profilKaydet").onclick = profilKaydet;
@@ -1149,8 +1000,7 @@
   // Tabla olcusu degisince son fotograf yeniden olculur (elle konan koseler korunur, olcek yeni olcuyle)
   ["uzunluk", "genislik"].forEach(id => $(id).addEventListener("change", () => { if (sonFoto && yontem() === "damasiz" && !$("profil").value) olc(sonFoto, false, true); }));
   profilleriYukle();
-  mod = "dama"; gorunum = "kamera"; ciz();
-  istek("/api/durum").then(d => { durum = d; ciz(); }).catch(e => { hata(e.message); durumYaz(); });
+  gorunum = "kamera"; ciz();
 })();
 </script>
 </body>

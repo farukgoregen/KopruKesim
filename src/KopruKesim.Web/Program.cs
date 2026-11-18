@@ -4,7 +4,7 @@ using KopruKesim.Vision;
 using OpenCvSharp;
 
 // Yerel deneme arayuzu. Calistirma: dotnet run --project src/KopruKesim.Web
-// Kalibrasyon ve bos tabla referansi "veri" klasorunde tutulur.
+// Olcum kayitlari ve kayitli tablalar "veri" klasorunde tutulur.
 // Ag modu (--ag): ayni Wi-Fi'deki telefon/tablet https ile baglanir (tarayici kameraya ancak https ile izin verir).
 bool networkMode = args.Contains("--ag");
 var builder = WebApplication.CreateBuilder(args.Where(a => a != "--ag").ToArray());
@@ -41,50 +41,11 @@ var inv = CultureInfo.InvariantCulture;
 var gate = new object();
 string dataDir = Path.Combine(app.Environment.ContentRootPath, "veri");
 Directory.CreateDirectory(dataDir);
-string calPath = Path.Combine(dataDir, "kalibrasyon.txt");
-string refPath = Path.Combine(dataDir, "kalibrasyon_referans.png");
-string layoutPath = Path.Combine(dataDir, "isaretler.txt");
-MarkerLayout LoadLayout() => File.Exists(layoutPath) ? MarkerLayout.Load(layoutPath) : null;
-
-// Ornek gorseller depo kokundeki "ornek" klasorunden gelir
+// Yazdirilacak etiket PDF'leri depo kokundeki "ornek/dama" klasorunden gelir
 string repoRoot = app.Environment.ContentRootPath;
 while (repoRoot != null && !File.Exists(Path.Combine(repoRoot, "KopruKesim.sln"))) repoRoot = Path.GetDirectoryName(repoRoot);
-var samples = new Dictionary<string, string> { { "bos", "bos_tabla.webp" }, { "mermer", "mermer.webp" } };
 
 IResult Fail(string message) => Results.Json(new { hata = message }, statusCode: 400);
-
-object State()
-{
-    MarkerLayout layout = LoadLayout();
-    var isaretli = layout == null ? null : new
-    {
-        sayi = layout.Markers.Count,
-        numaralar = layout.Markers.Select(m => m.Id),
-        yukseklik = layout.MarkerHeightMm
-    };
-    if (!File.Exists(calPath))
-    {
-        if (layout == null) return new { kurulu = false };
-        return new
-        {
-            kurulu = true,
-            tabla = new { uzunluk = layout.TableLengthMm, genislik = layout.TableWidthMm },
-            isaretli,
-            referansVar = File.Exists(refPath)
-        };
-    }
-    TableCalibration cal = TableCalibration.Load(calPath);
-    return new
-    {
-        kurulu = true,
-        tabla = new { uzunluk = layout?.TableLengthMm ?? cal.TableLengthMm, genislik = layout?.TableWidthMm ?? cal.TableWidthMm },
-        goruntu = new { w = cal.ImageWidth, h = cal.ImageHeight },
-        koseler = new[] { P(cal.CornerOrigin), P(cal.CornerYEnd), P(cal.CornerFar), P(cal.CornerXEnd) },
-        tutarlilik = cal.Camera == null ? (double?)null : Math.Round(cal.Camera.Consistency, 2),
-        isaretli,
-        referansVar = File.Exists(refPath)
-    };
-}
 
 static double[] P(Point2 p) => new[] { Math.Round(p.X, 1), Math.Round(p.Y, 1) };
 
@@ -103,17 +64,6 @@ Point2[] ParseCorners(string text)
     return c;
 }
 
-void SaveCalibration(Point2[] corners, double length, double width, int w, int h)
-{
-    var cal = new TableCalibration
-    {
-        TableLengthMm = length, TableWidthMm = width, ImageWidth = w, ImageHeight = h,
-        CornerOrigin = corners[0], CornerYEnd = corners[1], CornerFar = corners[2], CornerXEnd = corners[3]
-    };
-    cal.Build();
-    cal.Save(calPath);
-}
-
 async Task<byte[]> ReadFile(IFormCollection form)
 {
     IFormFile f = form.Files.GetFile("dosya");
@@ -122,83 +72,6 @@ async Task<byte[]> ReadFile(IFormCollection form)
     await f.CopyToAsync(ms);
     return ms.ToArray();
 }
-
-app.MapGet("/api/durum", () => { lock (gate) return Results.Json(State()); });
-
-app.MapGet("/api/ornek/{ad}", (string ad) =>
-{
-    if (repoRoot == null || !samples.TryGetValue(ad, out string file)) return Results.NotFound();
-    string path = Path.Combine(repoRoot, "ornek", file);
-    return File.Exists(path) ? Results.File(path, "image/webp") : Results.NotFound();
-});
-
-app.MapGet("/api/referans", () =>
-{
-    lock (gate)
-    {
-        if (!File.Exists(refPath)) return Results.NotFound();
-        using Mat m = Cv2.ImRead(refPath);
-        return Results.File(m.ToBytes(".jpg"), "image/jpeg");
-    }
-});
-
-// Kurulum: bos tabla fotografi. Koseler verilmezse otomatik bulunur.
-app.MapPost("/api/kur", async (HttpRequest req) =>
-{
-    IFormCollection form = await req.ReadFormAsync();
-    byte[] bytes = await ReadFile(form);
-    if (bytes == null) return Fail("Fotoğraf gelmedi.");
-    double length = double.TryParse(form["uzunluk"], NumberStyles.Float, inv, out double l) ? l : 3300;
-    double width = double.TryParse(form["genislik"], NumberStyles.Float, inv, out double w) ? w : 2000;
-    if (length <= 0 || width <= 0) return Fail("Tabla ölçüleri sıfırdan büyük olmalı.");
-    lock (gate)
-    {
-        using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
-        if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
-        Point2[] corners = TableFinder.FindCorners(frame, length, width);
-        bool found = corners != null;
-        if (found)
-        {
-            try { SaveCalibration(corners, length, width, frame.Cols, frame.Rows); }
-            catch (ArgumentException) { found = false; }   // bulunan koselerle kalibrasyon kurulamadi
-        }
-        if (!found)
-        {
-            // Bulunamadi: kullanici surukleyip duzeltsin diye iceride bir dortgen oner
-            double mx = frame.Cols * 0.2, my = frame.Rows * 0.15;
-            corners = new[] { new Point2(mx, my), new Point2(frame.Cols - mx, my), new Point2(frame.Cols - mx, frame.Rows - my), new Point2(mx, frame.Rows - my) };
-            SaveCalibration(corners, length, width, frame.Cols, frame.Rows);
-        }
-        Cv2.ImWrite(refPath, frame);
-        return Results.Json(new { otomatikBulundu = found, durum = State() });
-    }
-});
-
-// Koseleri elle duzeltme (surukleme) ya da tabla olcusunu degistirme
-app.MapPost("/api/koseler", async (HttpRequest req) =>
-{
-    IFormCollection form = await req.ReadFormAsync();
-    lock (gate)
-    {
-        if (!File.Exists(calPath)) return Fail("Önce kurulum yapın.");
-        TableCalibration old = TableCalibration.Load(calPath);
-        Point2[] corners;
-        try { corners = ParseCorners(form["koseler"]); } catch (FormatException) { corners = null; }
-        if (corners == null) corners = new[] { old.CornerOrigin, old.CornerYEnd, old.CornerFar, old.CornerXEnd };
-        double length = double.TryParse(form["uzunluk"], NumberStyles.Float, inv, out double l) ? l : old.TableLengthMm;
-        double width = double.TryParse(form["genislik"], NumberStyles.Float, inv, out double w) ? w : old.TableWidthMm;
-        if (length <= 0 || width <= 0) return Fail("Tabla ölçüleri sıfırdan büyük olmalı.");
-        // Surüklenen koseler kurulum fotografindaki kenarlara piksel alti hassasiyetle oturtulur
-        if (form["incelt"] == "1" && File.Exists(refPath))
-        {
-            using Mat setupFrame = Cv2.ImRead(refPath);
-            if (!setupFrame.Empty()) corners = TableFinder.RefineCorners(setupFrame, corners, Math.Max(8, setupFrame.Cols / 100));
-        }
-        try { SaveCalibration(corners, length, width, old.ImageWidth, old.ImageHeight); }
-        catch (Exception) { return Fail("Bu köşelerle geçerli bir tabla oluşmuyor. Köşeleri sırasıyla yerleştirin."); }
-        return Results.Json(State());
-    }
-});
 
 // ---------- Tabla profilleri ----------
 // Her tabla icin bir kez: referans fotograf + onayli dort kose + tabla olcusu (veri/tablalar/<id>/).
@@ -287,23 +160,21 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
     byte[] bytes = await ReadFile(form);
     if (bytes == null) return Fail("Fotoğraf gelmedi.");
     double thickness = double.TryParse(form["kalinlik"], NumberStyles.Float, inv, out double t) && t >= 0 ? t : 20;
-    bool useReference = form["referans"] == "1";
     bool uniformTable = form["tekrenk"] == "1";
-    // Tek fotograf: kurulum yok; tabla olcusu formdan, tabla bu fotografta bulunur
-    bool singlePhoto = form["tekfoto"] == "1";
-    // Kose dama etiketleri: "buyuk" (7x5 kare, 38 mm) ya da "normal" (10x7 kare, 25 mm). Yerlesim tabla olcusunden uretilir.
+    // Kose dama etiketleri: "kucuk", "buyuk" ya da "normal"; yerlesim tabla olcusunden uretilir.
+    // Bos ise damasiz: tabla koseleri fotograftan (otomatik, elle ya da kayitli tabladan) bulunur.
     string checker = form["dama"].ToString();
     double formLength = double.TryParse(form["uzunluk"], NumberStyles.Float, inv, out double fl) && fl > 0 ? fl : 0;
     double formWidth = double.TryParse(form["genislik"], NumberStyles.Float, inv, out double fw) && fw > 0 ? fw : 0;
     double margin = double.TryParse(form["kenar"], NumberStyles.Float, inv, out double m) ? m : 40;
     lock (gate)
     {
-        // Damasiz tek fotograf: kayitli isaret dosyasi olsa bile kullanilmaz, tabla koseleri fotograftan bulunur
-        MarkerLayout layout = singlePhoto && checker == "" ? null : LoadLayout();
-        TableCalibration cal = File.Exists(calPath) ? TableCalibration.Load(calPath) : null;
-        if ((singlePhoto || checker != "") && (formLength <= 0 || formWidth <= 0)) return Fail("Tablanın uzunluğunu ve genişliğini girin.");
-        if (checker == "buyuk" || checker == "normal" || checker == "kucuk") layout = CheckerLayout(formLength, formWidth, checker);
-        if (!singlePhoto && layout == null && cal == null) return Fail("Önce kurulum yapın ya da tek fotoğraf modunu açın.");
+        if (checker != "" && checker != "buyuk" && checker != "normal" && checker != "kucuk") return Fail("Bilinmeyen etiket türü.");
+        bool checkerless = checker == "";
+        string profileId = form["profil"].ToString();
+        bool hasProfile = checkerless && ValidProfileId(profileId) && File.Exists(Path.Combine(ProfileFolder(profileId), "profil.txt"));
+        if (!hasProfile && (formLength <= 0 || formWidth <= 0)) return Fail("Tablanın uzunluğunu ve genişliğini girin.");
+        MarkerLayout layout = checkerless ? null : CheckerLayout(formLength, formWidth, checker);
         using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
         if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
 
@@ -316,13 +187,10 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             CleanupMm = uniformTable ? 8 : 25,   // tek renkli tablada gurultu az; kucuk parcalarin koseleri yuvarlanmasin
             Locator = new LocatorOptions { SimplifyToleranceMm = 30, MinEdgeMm = 150 }
         };
-        using Mat empty = File.Exists(refPath) ? Cv2.ImRead(refPath) : null;
         // Damasiz yolda koseler uc kaynaktan gelebilir: elle verilen (suruklenen) koseler, kayitli tabla
         // profili (desen eslestirmesi) ya da fotograftan otomatik bulma.
-        bool checkerless = checker == "" && singlePhoto && layout == null;
         Point2[] manualCorners = null;
         try { manualCorners = ParseCorners(form["koseler"]); } catch (FormatException) { manualCorners = null; }
-        string profileId = form["profil"].ToString();
         TableMatch profileMatch = null;
         string profileNote = null;
         MeasureOutput attempt = null;
@@ -350,7 +218,7 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             // kenarda koseyi ice dogru yanlis cizgiye cekebiliyor (2026-11-18 ofis masasi).
             attempt = TableMeasure.RunWithCorners(frame, manualCorners, formLength, formWidth, options, thickness, true, Math.Max(3.0, Math.Max(frame.Cols, frame.Rows) / 1000.0));
         }
-        else if (checkerless && ValidProfileId(profileId) && File.Exists(Path.Combine(ProfileFolder(profileId), "profil.txt")))
+        else if (hasProfile)
         {
             TableProfile profile = null;
             try { profile = TableProfile.Load(Path.Combine(ProfileFolder(profileId), "profil.txt")); }
@@ -375,7 +243,7 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
         if (attempt == null)
             attempt = checkerless
                 ? TableMeasure.RunSingle(frame, formLength, formWidth, options, thickness)
-                : TableMeasure.Run(cal, frame, empty, useReference, options, layout, thickness);
+                : TableMeasure.RunWithTags(frame, layout, options, thickness);
         // Secilen etiket turunde dort etiket cikmazsa digerleri denenir: yanlis tur secmek olcumu bozmasin
         string usedChecker = checker;
         if (layout != null && layout.Kind == "dama" && checker != "" && attempt.Error != null && attempt.Error.StartsWith("Yeterli isaret"))
@@ -384,7 +252,7 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             {
                 if (other == checker) continue;
                 MarkerLayout l2 = CheckerLayout(formLength, formWidth, other);
-                MeasureOutput r2 = TableMeasure.Run(cal, frame, empty, useReference, options, l2, thickness);
+                MeasureOutput r2 = TableMeasure.RunWithTags(frame, l2, options, thickness);
                 if (r2.Error == null) { attempt.Dispose(); attempt = r2; layout = l2; usedChecker = other; break; }
                 r2.Dispose();
             }
@@ -442,7 +310,7 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
         {
             tabla = new { uzunluk = used.TableLengthMm, genislik = used.TableWidthMm },
             kalinlik = thickness,
-            tekFoto = singlePhoto && layout == null,
+            tekFoto = checkerless,
             goruntuBoyutu = new { w = used.ImageWidth, h = used.ImageHeight },
             tablaKoseleri = new[] { P(used.CornerOrigin), P(used.CornerYEnd), P(used.CornerFar), P(used.CornerXEnd) },
             tutarlilik = used.Camera == null ? (double?)null : Math.Round(used.Camera.Consistency, 2),
@@ -451,11 +319,7 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             profil,
             koseKaynagi = result.ProfileMatched ? "profil" : manualCorners != null ? "elle" : checkerless ? "otomatik" : "etiket",
             kayit = logId,
-            referansKullanildi = result.UsedReference,
             isaretler,
-            kameraOynamis = result.CameraMoved,
-            tablaYenidenBulundu = result.Relocated,
-            kenarGorunurlugu = double.IsNaN(result.EdgeRatio) ? (double?)null : Math.Round(result.EdgeRatio, 2),
             goruntu = image,
             parcalar = slabs.Select(s => new
             {
@@ -470,33 +334,6 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
                 not = s.Note
             })
         });
-    }
-});
-
-// Isaret yerlesim dosyasi: yuklenince her olcum kalibrasyonu fotograftaki isaretlerden hesaplar
-app.MapPost("/api/isaretler", async (HttpRequest req) =>
-{
-    IFormCollection form = await req.ReadFormAsync();
-    byte[] bytes = await ReadFile(form);
-    if (bytes == null) return Fail("Dosya gelmedi.");
-    string tmp = Path.Combine(dataDir, "isaretler.yeni.txt");
-    lock (gate)
-    {
-        File.WriteAllBytes(tmp, bytes);
-        try { MarkerLayout.Load(tmp); }
-        catch (Exception e) when (e is FormatException || e is OverflowException) { File.Delete(tmp); return Fail("İşaret dosyası okunamadı: " + e.Message); }
-        File.Copy(tmp, layoutPath, true);
-        File.Delete(tmp);
-        return Results.Json(State());
-    }
-});
-
-app.MapPost("/api/isaretler/kaldir", () =>
-{
-    lock (gate)
-    {
-        if (File.Exists(layoutPath)) File.Delete(layoutPath);
-        return Results.Json(State());
     }
 });
 

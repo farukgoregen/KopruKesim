@@ -17,15 +17,6 @@ namespace KopruKesim.Vision
         private static readonly bool Debug = Environment.GetEnvironmentVariable("KK_DEBUG") == "1";
 
         /// <summary>
-        /// Koseleri goruntudeki yerine gore sirali dondurur: sol ust, sag ust, sag alt, sol alt.
-        /// Bulunamazsa null. Tabla olcusu verilmedigi icin ortulu kenar tamamlanamaz.
-        /// </summary>
-        public static Point2[] FindCorners(Mat emptyTableFrame)
-        {
-            return FindCorners(emptyTableFrame, 0, 0);
-        }
-
-        /// <summary>
         /// Koseleri bulur; tabla olcusu (mm) biliniyorsa ortulu ya da renkten ayrilamayan bir kenari
         /// tamamlar. Sira: sol ust (0 noktasi), sag ust, sag alt, sol alt (X ucu).
         /// Yontem: kenarlar boyunca yurunur, her kenarin gorundugu uclar bulunur; ortasi kapali
