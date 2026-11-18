@@ -64,6 +64,9 @@ Point2[] ParseCorners(string text)
     return c;
 }
 
+// Kenar noktasinin kenara dik yonde aranacagi yaricap: elle yakinlastirarak konan nokta birkac piksel icinde olur
+static double EdgeSnapPx(Mat frame) => Math.Max(5.0, Math.Max(frame.Cols, frame.Rows) / 400.0);
+
 async Task<byte[]> ReadFile(IFormCollection form)
 {
     IFormFile f = form.Files.GetFile("dosya");
@@ -197,7 +200,32 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
         // Iki kose modu: kullanici yalniz sol ust ve sag alt koseyi verir ("kosegen"); "koseler" tahmindir.
         // Diger iki kose, verilen koselerden cikan tabla kenarlarinin kesisiminden bulunur.
         string diag = form["kosegen"].ToString();
-        if (checkerless && manualCorners != null && !string.IsNullOrWhiteSpace(diag))
+        // Cok noktali tespit: kenar basina birden cok nokta ("kenarNoktalari": kenarlar '|', noktalar ';',
+        // koordinatlar ',' ile; sira ust, sag, alt, sol). Noktalar kenara oturtulur, dogrular uydurulur,
+        // koseler kesisimlerden hesaplanir.
+        string edgeText = form["kenarNoktalari"].ToString();
+        EdgeFitResult edgeFit = null;
+        bool edgeManual = false;
+        if (checkerless && !string.IsNullOrWhiteSpace(edgeText))
+        {
+            List<List<Point2>> groups;
+            try
+            {
+                groups = edgeText.Split('|').Select(g => g.Split(';', StringSplitOptions.RemoveEmptyEntries).Select(t =>
+                {
+                    string[] xy = t.Split(',');
+                    if (xy.Length != 2) throw new FormatException(t);
+                    return new Point2(double.Parse(xy[0], inv), double.Parse(xy[1], inv));
+                }).ToList()).ToList();
+            }
+            catch (FormatException) { return Fail("Kenar noktaları okunamadı."); }
+            if (groups.Count != 4 || groups.Any(g => g.Count < 2)) return Fail("Her kenarda en az iki nokta olmalı.");
+            edgeFit = EdgePointFit.Fit(frame, groups, EdgeSnapPx(frame));
+            if (edgeFit.Corners == null) return Fail(edgeFit.Error);
+            edgeManual = true;
+            attempt = TableMeasure.RunWithCorners(frame, edgeFit.Corners, formLength, formWidth, options, thickness, false);
+        }
+        else if (checkerless && manualCorners != null && !string.IsNullOrWhiteSpace(diag))
         {
             string[] dp = diag.Split(';');
             try
@@ -258,6 +286,14 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             }
         }
         using MeasureOutput result = attempt;
+        // Elle nokta verilmediyse: bulunan dortgenin her kenarina noktalar konup oturtulur; kenarlarin ne kadar
+        // duz oldugu gosterilir ve kullanici bu noktalardan baslayarak duzeltebilir (koseler degismez).
+        if (checkerless && edgeFit == null && result.Error == null && result.Calibration != null)
+        {
+            TableCalibration uc = result.Calibration;
+            var guess = new[] { uc.CornerOrigin, uc.CornerYEnd, uc.CornerFar, uc.CornerXEnd };
+            edgeFit = EdgePointFit.Fit(frame, EdgePointFit.Sample(guess, 7), EdgeSnapPx(frame));
+        }
         string checkerName(string t) => t == "kucuk" ? "Küçük" : t == "buyuk" ? "Büyük kareli" : "Normal";
         var isaretler = result.Markers == null ? null : new
         {
@@ -290,6 +326,20 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
         double? consistency = result.Calibration?.Camera == null ? (double?)null : result.Calibration.Camera.Consistency;
         var uyarilar = new List<string>();
         if (profileNote != null) uyarilar.Add(profileNote);
+        // Cok noktali denetim: kenar noktalari duz bir cizgiye oturmuyorsa kose yanlis olabilir
+        if (edgeFit?.Edges != null)
+        {
+            string[] edgeNames = { "Üst", "Sağ", "Alt", "Sol" };
+            for (int i = 0; i < 4; i++)
+            {
+                FittedEdge fe = edgeFit.Edges[i];
+                int bad = fe.Inlier.Count(b => !b);
+                if (bad > 0 || !fe.Straight)
+                    uyarilar.Add($"{edgeNames[i]} kenar: " + (bad > 0 ? $"{bad} nokta çizgiye uymadı" : "") + (bad > 0 && !fe.Straight ? ", " : "")
+                        + (!fe.Straight ? $"kenar düz değil (en büyük sapma {fe.Max:F1} px)" : "")
+                        + ". Köşeler yanlış olabilir; Fotoğraf sekmesinde o kenarın noktalarını gerçek kenara sürükleyin.");
+            }
+        }
         // Profilden tasinan koselerde de gosterilir: yanlis desen eslesmesini ortaya cikaran tek isaret bu
         if (manualCorners == null && !double.IsNaN(result.TableSupport) && result.TableSupport < 0.8)
             uyarilar.Add($"Tabla kenarları zayıf bulundu (%{result.TableSupport * 100:F0}).");
@@ -317,7 +367,15 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             kenarDestegi = double.IsNaN(result.TableSupport) ? (double?)null : Math.Round(result.TableSupport, 2),
             uyarilar,
             profil,
-            koseKaynagi = result.ProfileMatched ? "profil" : manualCorners != null ? "elle" : checkerless ? "otomatik" : "etiket",
+            koseKaynagi = edgeManual ? "noktalar" : result.ProfileMatched ? "profil" : manualCorners != null ? "elle" : checkerless ? "otomatik" : "etiket",
+            kenarlar = edgeFit?.Edges?.Select(e => new
+            {
+                noktalar = e.Points.Select((pt, i) => new object[] { Math.Round(pt.X, 2), Math.Round(pt.Y, 2), Math.Round(e.Residuals[i], 2), e.Inlier[i], e.Snapped[i] }),
+                ortalamaPx = Math.Round(e.Rms, 2),
+                enBuyukPx = Math.Round(e.Max, 2),
+                duz = e.Straight,
+                aykiri = e.Inlier.Count(b => !b)
+            }),
             kayit = logId,
             isaretler,
             goruntu = image,
