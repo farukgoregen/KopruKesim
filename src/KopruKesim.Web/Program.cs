@@ -285,15 +285,46 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
                 r2.Dispose();
             }
         }
-        using MeasureOutput result = attempt;
         // Elle nokta verilmediyse: bulunan dortgenin her kenarina noktalar konup oturtulur; kenarlarin ne kadar
-        // duz oldugu gosterilir ve kullanici bu noktalardan baslayarak duzeltebilir (koseler degismez).
-        if (checkerless && edgeFit == null && result.Error == null && result.Calibration != null)
+        // duz oldugu gosterilir ve kullanici bu noktalardan baslayarak duzeltebilir.
+        if (checkerless && edgeFit == null && attempt.Error == null && attempt.Calibration != null)
         {
-            TableCalibration uc = result.Calibration;
+            TableCalibration uc = attempt.Calibration;
             var guess = new[] { uc.CornerOrigin, uc.CornerYEnd, uc.CornerFar, uc.CornerXEnd };
             edgeFit = EdgePointFit.Fit(frame, EdgePointFit.Sample(guess, 7), EdgeSnapPx(frame));
         }
+        // Lens bukulmesi (cekul yontemi): tablanin dort kenari gercekte duzdur. Kenar noktalarini duzlestiren
+        // katsayi bulunursa fotograf duzlestirilir, noktalar orada yeniden oturtulur ve olcum duz goruntude yapilir.
+        // Arayuze giden koseler ve noktalar fotograftaki (bukuk) yerlerine geri cevrilir.
+        LensModel lens = null;
+        double lensBefore = double.NaN, lensAfter = double.NaN;
+        if (checkerless && form["lens"] != "0" && edgeFit?.Edges != null && attempt.Error == null)
+        {
+            lens = LensCorrection.Estimate(frame.Cols, frame.Rows, edgeFit.Edges, out lensBefore, out lensAfter);
+            if (lens != null)
+            {
+                using Mat flat = lens.UndistortImage(frame);
+                var flatPoints = edgeFit.Edges.Select(e => e.Points.Select(lens.Undistort).ToList()).ToList();
+                EdgeFitResult flatFit = EdgePointFit.Fit(flat, flatPoints, 3.0);
+                MeasureOutput flatAttempt = flatFit.Corners == null ? null
+                    : TableMeasure.RunWithCorners(flat, flatFit.Corners, formLength, formWidth, options, thickness, false);
+                if (flatAttempt != null && flatAttempt.Error == null)
+                {
+                    flatAttempt.ProfileMatched = attempt.ProfileMatched;
+                    attempt.Dispose();
+                    attempt = flatAttempt;
+                    // Gosterim icin noktalar fotograftaki yerlerine (sapmalar duz goruntudeki degerler)
+                    foreach (FittedEdge fe in flatFit.Edges) fe.Points = fe.Points.Select(lens.Distort).ToArray();
+                    edgeFit = flatFit;
+                }
+                else
+                {
+                    flatAttempt?.Dispose();
+                    lens = null;
+                }
+            }
+        }
+        using MeasureOutput result = attempt;
         string checkerName(string t) => t == "kucuk" ? "Küçük" : t == "buyuk" ? "Büyük kareli" : "Normal";
         var isaretler = result.Markers == null ? null : new
         {
@@ -362,7 +393,16 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             kalinlik = thickness,
             tekFoto = checkerless,
             goruntuBoyutu = new { w = used.ImageWidth, h = used.ImageHeight },
-            tablaKoseleri = new[] { P(used.CornerOrigin), P(used.CornerYEnd), P(used.CornerFar), P(used.CornerXEnd) },
+            // Duzlestirilmis goruntude olculduyse koseler fotograftaki yerlerine geri cevrilir (arayuz fotografi cizer)
+            tablaKoseleri = new[] { used.CornerOrigin, used.CornerYEnd, used.CornerFar, used.CornerXEnd }.Select(c => P(lens == null ? c : lens.Distort(c))),
+            lens = new
+            {
+                duzeltildi = lens != null,
+                katsayi = lens == null ? 0 : Math.Round(lens.K, 4),
+                denenen = Math.Round(LensCorrection.LastK, 4),
+                oncePx = double.IsNaN(lensBefore) ? (double?)null : Math.Round(lensBefore, 2),
+                sonraPx = double.IsNaN(lensAfter) ? (double?)null : Math.Round(lensAfter, 2)
+            },
             tutarlilik = used.Camera == null ? (double?)null : Math.Round(used.Camera.Consistency, 2),
             kenarDestegi = double.IsNaN(result.TableSupport) ? (double?)null : Math.Round(result.TableSupport, 2),
             uyarilar,
