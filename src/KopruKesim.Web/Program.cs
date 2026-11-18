@@ -188,7 +188,8 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             MinAreaMm2 = 60 * 60,
             NoReferenceBrightnessDiff = uniformTable ? 35 : 0,
             CleanupMm = uniformTable ? 8 : 25,   // tek renkli tablada gurultu az; kucuk parcalarin koseleri yuvarlanmasin
-            Locator = new LocatorOptions { SimplifyToleranceMm = 30, MinEdgeMm = 150 }
+            Locator = new LocatorOptions { SimplifyToleranceMm = 30, MinEdgeMm = 150 },
+            RefineEdges = form["parcaIncelt"] != "0"   // parca kenarlarini fotografta cok noktayla oturt (karsilastirma icin kapatilabilir)
         };
         // Damasiz yolda koseler uc kaynaktan gelebilir: elle verilen (suruklenen) koseler, kayitli tabla
         // profili (desen eslestirmesi) ya da fotograftan otomatik bulma.

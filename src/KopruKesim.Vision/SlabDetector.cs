@@ -42,6 +42,15 @@ namespace KopruKesim.Vision
         /// <summary>Kenar tabanli (duz kenar) bulucu nasil kullanilsin.</summary>
         public EdgeMode EdgeMode = EdgeMode.Fallback;
         public EdgeRectOptions Edges = new EdgeRectOptions();
+        /// <summary>
+        /// Dort koseli parcalarin kenarlari orijinal fotografta yeniden oturtulur (kenar basina cok nokta, piksel alti,
+        /// aykiri ayiklama). Ustten goruntudeki maske kaba (temizleme, olcek); bu adim kenari gercek gecise koyar.
+        /// </summary>
+        public bool RefineEdges = true;
+        /// <summary>Kenar oturtmada noktanin kenara dik yonde aranacagi yaricap (mm).</summary>
+        public double RefineSearchMm = 6;
+        /// <summary>Kenar basina nokta sayisi.</summary>
+        public int RefinePointsPerEdge = 15;
     }
 
     /// <summary>Kenar tabanli bulucunun renk yontemiyle birlesimi.</summary>
@@ -163,6 +172,7 @@ namespace KopruKesim.Vision
             {
                 SlabResult r = SlabLocator.Locate(contour, ScaledLocator(contour), _cal.SlabThicknessMm, _cal.Camera);
                 if (r == null) continue;
+                r = RefineInImage(frame, contour, r);
                 Assess(r, contour);
                 r.Method = "renk";
                 results.Add(r);
@@ -171,6 +181,87 @@ namespace KopruKesim.Vision
             // Once guvenilir parcalar, sonra alana gore
             results.Sort((a, b) => a.IsReliable != b.IsReliable ? (a.IsReliable ? -1 : 1) : b.AreaMm2.CompareTo(a.AreaMm2));
             return results;
+        }
+
+        /// <summary>Son kenar oturtmanin ozeti (teshis): kac kenar oturtuldu, ortalama kose kaymasi (px).</summary>
+        public List<string> RefineLog = new List<string>();
+
+        /// <summary>
+        /// Dort koseli parcanin kenarlarini orijinal fotografta yeniden bulur. Kalinlik duzeltmesiz siluet dortgeni
+        /// fotografa tasinir, her kenara noktalar konup en guclu gecise oturtulur (EdgePointFit), dogrular kesistirilir,
+        /// tabla mm'ye geri cevrilir ve kalinlik duzeltmesi ayni SlabLocator ile yeniden uygulanir.
+        /// Kalinlik varken kameraya bakan kenarlara dokunulmaz: orada ust yuzey / on yuz / tabla diye iki gecis var ve
+        /// en guclusu ust yuzeyin kenari olabilir (siluet alt kenari istenir). Guvenilir sonuc cikmazsa r aynen doner.
+        /// </summary>
+        private SlabResult RefineInImage(Mat frame, Point2[] contour, SlabResult r)
+        {
+            if (!_opt.RefineEdges || r.Vertices == null || r.Vertices.Length != 4) return r;
+            LocatorOptions loc = ScaledLocator(contour);
+            SlabResult raw = SlabLocator.Locate(contour, loc, 0, null);
+            if (raw == null || raw.Vertices.Length != 4) return r;
+            Homography toImage = _cal.ImageToTable.Inverse();
+            Point2[] vMm = raw.Vertices;   // saat yonunun tersine (mm)
+            Point2[] vPx = vMm.Select(toImage.Transform).ToArray();
+
+            CameraPose cam = _cal.Camera;
+            double t = _cal.SlabThicknessMm;
+            bool thick = cam != null && t > 0 && cam.Height > t;
+            List<Point2>[] samples = EdgePointFit.Sample(vPx, Math.Max(4, _opt.RefinePointsPerEdge));
+            var radius = new double[4];
+            var refine = new bool[4];
+            for (int e = 0; e < 4; e++)
+            {
+                Point2 a = vMm[e], b = vMm[(e + 1) % 4];
+                Point2 d = (b - a) * (1.0 / Math.Max(1e-9, Point2.Distance(a, b)));
+                var outward = new Point2(d.Y, -d.X);
+                Point2 mid = (a + b) * 0.5;
+                // Yerel olcek: kenarin ortasinda 1 mm kac piksel
+                double pxPerMm = Point2.Distance(toImage.Transform(mid), toImage.Transform(mid + outward));
+                radius[e] = Math.Max(3, Math.Min(40, _opt.RefineSearchMm * pxPerMm));
+                bool far = thick && Point2.Dot(mid - new Point2(cam.X, cam.Y), outward) > 0;
+                refine[e] = !thick || far;
+            }
+            double rMax = radius.Max();
+            EdgeFitResult snapped = EdgePointFit.Fit(frame, samples, rMax);
+            EdgeFitResult plain = EdgePointFit.Fit(frame, samples, 0);
+            if (snapped.Edges == null || plain.Edges == null) return r;
+
+            var edges = new FittedEdge[4];
+            int used = 0;
+            for (int e = 0; e < 4; e++)
+            {
+                FittedEdge fe = snapped.Edges[e];
+                int good = Enumerable.Range(0, fe.Points.Length).Count(i => fe.Snapped[i] && fe.Inlier[i]
+                    && Point2.Distance(fe.Points[i], samples[e][i]) <= radius[e]);
+                // Noktalarin yarisindan azi oturduysa ya da kenar duz degilse eski dogru kalir
+                if (refine[e] && good * 2 >= fe.Points.Length && fe.Straight) { edges[e] = fe; used++; }
+                else edges[e] = plain.Edges[e];
+            }
+            if (used == 0) return r;
+
+            var cornersPx = new Point2[4];
+            for (int i = 0; i < 4; i++)
+            {
+                FittedEdge p = edges[(i + 3) % 4], q = edges[i];
+                double den = p.A * q.B - q.A * p.B;
+                if (Math.Abs(den) < 1e-6) return r;
+                cornersPx[i] = new Point2((p.B * q.C - q.B * p.C) / den, (q.A * p.C - p.A * q.C) / den);
+                // Kose kaba konumdan arama yaricapinin iki katindan fazla kaydiysa oturtma baska bir gecise atlamis
+                if (Point2.Distance(cornersPx[i], vPx[i]) > 2 * rMax) return r;
+            }
+            Point2[] cornersMm = cornersPx.Select(_cal.ImageToTable.Transform).ToArray();
+            // Duz kenarli yogun kontur: kalinlik duzeltmesi ve olcu aciklamasi ayni yoldan gecsin
+            var dense = new List<Point2>();
+            for (int e = 0; e < 4; e++)
+            {
+                Point2 a = cornersMm[e], b = cornersMm[(e + 1) % 4];
+                for (int k = 0; k < 40; k++) dense.Add(a + (b - a) * (k / 40.0));
+            }
+            SlabResult refined = SlabLocator.Locate(dense, loc, t, cam);
+            if (refined == null || refined.Vertices.Length != 4) return r;
+            RefineLog.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "{0}/4 kenar, kose kaymasi {1:F1} px", used, Enumerable.Range(0, 4).Average(i => Point2.Distance(cornersPx[i], vPx[i]))));
+            return refined;
         }
 
         /// <summary>
@@ -235,6 +326,7 @@ namespace KopruKesim.Vision
                 Point2[] c = contour.ToArray();
                 SlabResult r = SlabLocator.Locate(c, ScaledLocator(c), _cal.SlabThicknessMm, _cal.Camera);
                 if (r == null) continue;
+                r = RefineInImage(frame, c, r);
                 Assess(r, c);
                 r.Method = "kenar";
                 if (!r.IsReliable) continue;

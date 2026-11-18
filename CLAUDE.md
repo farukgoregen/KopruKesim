@@ -39,7 +39,7 @@ Kamera fotoğrafından tablaya konan mermerin köşe koordinatlarını (mm) bula
 - Kameraya bakan kenar ±15 mm belirsiz olabilir; SlabLocator bazen 0–1 mm'lik sahte köşe ekliyor.
 
 ## Sıradaki işler
-1. Çok noktalı tabla tespiti (kenar başına birden çok nokta, çizgi uydurma, düzlük denetimi).
+1. Parça kenarları da çok noktalı (2026-11-18, `SlabDetector.RefineInImage`, `DetectorOptions.RefineEdges`, web alanı `parcaIncelt=0` ile kapatılır): kalınlık düzeltmesiz siluet dörtgeni orijinal fotoğrafa taşınır, kenar başına 15 nokta ±6 mm içinde en güçlü geçişe oturtulur (`EdgePointFit`), kesişimler mm'ye çevrilip kalınlık düzeltmesi aynı `SlabLocator` ile uygulanır; kalınlık > 0 iken kameraya bakan kenarlara dokunulmaz. Ofis masası A4 (doğru köşeler, 4 foto): 293–295 × 208–210 → 295–296 × 209–210, karşılıklı kenarlar tutarlı; plaka 330×205 → 328–330 × 206. Kalan uzun yönde −0,5/−0,7 % sistematik. Lens bükülmesi (`LensCorrection`, çekül yöntemi, 2026-11-18) telefon fotoğraflarında katkı vermedi (kenar sapması %3–8 azaldı, düzeltme devreye girmiyor); masa uzunluğu (750) şeritle teyit edilmeli. (Çok noktalı tabla tespiti `EdgePointFit` 2026-11-18'de yapıldı: kenar başına nokta, alt piksel oturtma, aykırı ayıklama, düzlük; elle düzeltme artık kenar noktalarıyla, `kenarNoktalari` alanı.)
 2. Gerçek sabit kamerada ölçüsü bilinen birkaç parçayla doğrulama; makine sıfırı ve eksen yönlerinin teyidi.
 3. Lens bozulması kalibrasyonu.
 4. Canlı kamerayla sürekli ölçüm; sonucun PLC'ye iletilmesi.
