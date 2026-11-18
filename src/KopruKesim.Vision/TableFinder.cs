@@ -50,7 +50,6 @@ namespace KopruKesim.Vision
                 Point2[] refined = RefineCorners(emptyTableFrame, region, snap);
                 if (IsValidQuad(refined, w, h)) candidates.Add(refined);
             }
-            if (candidates.Count == 0) return null;
             // Kenarlari gercek kenar cizgisine en iyi oturan aday kazanir
             Point2[] best = null;
             double bestScore = -1;
@@ -59,6 +58,22 @@ namespace KopruKesim.Vision
                 double score = EdgeSupport(emptyTableFrame, c).Average();
                 if (Debug) Console.WriteLine("  [aday] {0} kenar destegi={1:F2}", string.Join(" ", c.Select(p => p.ToString())), score);
                 if (score > bestScore) { bestScore = score; best = c; }
+            }
+            // Yedek: renk tabanli adaylar yoksa ya da kenarlara oturmuyorsa (tabla zeminle ayni renkte),
+            // tablayi uzun duz kenarlarindan bul
+            if (best == null || bestScore < 0.6)
+            {
+                Point2[] lines = LineTableFinder.Find(emptyTableFrame);
+                if (lines != null)
+                {
+                    Point2[] refined = RefineCorners(emptyTableFrame, lines, snap);
+                    if (IsValidQuad(refined, w, h))
+                    {
+                        double score = EdgeSupport(emptyTableFrame, refined).Average();
+                        if (Debug) Console.WriteLine("  [kenar adayi] {0} kenar destegi={1:F2}", string.Join(" ", refined.Select(p => p.ToString())), score);
+                        if (score > bestScore) { bestScore = score; best = refined; }
+                    }
+                }
             }
             return best;
         }
@@ -344,10 +359,24 @@ namespace KopruKesim.Vision
         {
             var f = new EdgeField(frame);
             var lines = new double[4][];
+            int reach = searchPx;
             for (int i = 0; i < 4; i++)
             {
                 Point2 p = rough[i], q = rough[(i + 1) % 4];
-                lines[i] = FitVisibleEdge(f, p, q, searchPx, 0.12, 0.88) ?? Line(p, q);
+                // Kaba kenar gercek kenardan uzak olabilir (ornek: tablanin kenar bandi farkli renkte, bolge
+                // buyutme bandin icinde durur; yuzeydeki desen cizgisi de gecis verir). Dar pencere icteki
+                // zayif cizgiye oturur. Genis pencereler de denenir; kenar boyunca destegi belirgin
+                // yuksek olan secilir (esitlikte dar pencere: komsu baska cizgiye atlamasin).
+                double[] best = null; double bestSupport = -1;
+                foreach (int k in new[] { 1, 3, 6 })
+                {
+                    double[] l = FitVisibleEdge(f, p, q, searchPx * k, 0.12, 0.88);
+                    if (l == null) continue;
+                    double s = LineSupport(f, l, p, q);
+                    if (Debug) Console.WriteLine("  [incelt] kenar {0} pencere {1}: destek {2:F2}", i, searchPx * k, s);
+                    if (best == null || s > bestSupport + 0.15) { best = l; bestSupport = s; if (k > 1) reach = Math.Max(reach, searchPx * k); }
+                }
+                lines[i] = best ?? Line(p, q);
             }
             var c = new Point2[4];
             for (int i = 0; i < 4; i++)
@@ -355,9 +384,31 @@ namespace KopruKesim.Vision
                 double[] x = Cross(lines[(i + 3) % 4], lines[i]);
                 if (Math.Abs(x[2]) < 1e-12) return rough;
                 c[i] = new Point2(x[0] / x[2], x[1] / x[2]);
-                if (Point2.Distance(c[i], rough[i]) > 3 * searchPx) return rough;   // kenar baska bir cizgiye kaydi
+                if (Point2.Distance(c[i], rough[i]) > 3 * reach) return rough;   // kenar baska bir cizgiye kaydi
             }
             return c;
+        }
+
+        /// <summary>Dogru (a,b,c) uzerinde, p ve q'nun izdusumleri arasinda belirgin gecis olan orneklerin orani.</summary>
+        private static double LineSupport(EdgeField f, double[] line, Point2 p, Point2 q)
+        {
+            double nn = line[0] * line[0] + line[1] * line[1];
+            if (nn < 1e-12) return 0;
+            Func<Point2, Point2> proj = a =>
+            {
+                double t = (line[0] * a.X + line[1] * a.Y + line[2]) / nn;
+                return new Point2(a.X - line[0] * t, a.Y - line[1] * t);
+            };
+            Point2 a0 = proj(p), b0 = proj(q);
+            double len = (b0 - a0).Length;
+            if (len < 2) return 0;
+            Point2 d = (b0 - a0) * (1 / len);
+            var n = new Point2(-d.Y, d.X);
+            int ok = 0;
+            const int samples = 200;
+            for (int k = 0; k < samples; k++)
+                if (f.Strength(a0 + d * (len * (0.12 + 0.76 * k / (samples - 1))), n) > 40) ok++;
+            return (double)ok / samples;
         }
 
         /// <summary>

@@ -1,0 +1,149 @@
+<title>Köprü Kesim Kamera Önerisi</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&display=swap">
+<style>
+  /* Tek sutun yonetici notu: her karar bir kutu, ustte ozet, altta kamera listesi */
+  :root {
+    --zemin: #eef1f0;        /* atolye betonu, hafif yesile kayik */
+    --kagit: #ffffff;
+    --murekkep: #17242b;
+    --soluk: #55656c;
+    --cizgi: #cfd8d6;
+    --yesil: #137645;        /* makine yesili: karar ve oneriler */
+    --yesil-acik: #e3f1e8;
+    --serit: #d9a300;        /* serit metre: olculer */
+    --govde: "Barlow", "Segoe UI", system-ui, sans-serif;
+    --baslik: "Barlow Condensed", "Arial Narrow", "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --zemin: #121a1e; --kagit: #1a2429; --murekkep: #e6ecea; --soluk: #9fb0b5;
+      --cizgi: #2c3a40; --yesil: #4cc485; --yesil-acik: #183326; --serit: #f0c033;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --zemin: #121a1e; --kagit: #1a2429; --murekkep: #e6ecea; --soluk: #9fb0b5;
+    --cizgi: #2c3a40; --yesil: #4cc485; --yesil-acik: #183326; --serit: #f0c033;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--zemin); color: var(--murekkep);
+    font: 400 17px/1.55 var(--govde);
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 32px 56px;
+  }
+  .sayfa { max-width: 760px; margin: 0 auto; display: grid; gap: 22px; }
+  h1, h2, h3 { font-family: var(--baslik); font-weight: 700; text-wrap: balance; margin: 0; }
+  h1 { font-size: 40px; line-height: 1.05; }
+  .alt { color: var(--soluk); margin: 6px 0 0; }
+  .ozet {
+    background: var(--yesil-acik); border-left: 5px solid var(--yesil); padding: 16px 20px;
+    display: grid; gap: 6px;
+  }
+  .ozet h2 { font-size: 22px; color: var(--yesil); }
+  .ozet ul { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+  section.karar { background: var(--kagit); border: 1px solid var(--cizgi); padding: 20px 22px; display: grid; gap: 10px; }
+  .karar h2 { font-size: 26px; display: flex; gap: 12px; align-items: baseline; }
+  .karar h2 .no {
+    flex: none; width: 30px; height: 30px; border-radius: 50%; background: var(--murekkep); color: var(--kagit);
+    display: inline-grid; place-items: center; font-size: 19px; transform: translateY(-3px);
+  }
+  .cevap { font-size: 19px; font-weight: 600; margin: 0; }
+  .karar p { margin: 0; max-width: 68ch; }
+  .karar ul { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+  .olcu { font-family: var(--baslik); font-weight: 700; color: var(--murekkep); background: color-mix(in srgb, var(--serit) 30%, transparent); padding: 0 5px; }
+  .tablo { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 15.5px; }
+  th { text-align: left; font-weight: 600; color: var(--soluk); font-size: 13.5px; letter-spacing: .03em; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--cizgi); }
+  td { padding: 8px 10px 8px 0; border-bottom: 1px solid var(--cizgi); vertical-align: top; }
+  td:first-child { font-weight: 600; white-space: nowrap; }
+  .etiket { display: inline-block; font-size: 12.5px; font-weight: 600; padding: 1px 7px; border-radius: 3px; background: var(--yesil-acik); color: var(--yesil); margin-left: 6px; }
+  a { color: var(--yesil); }
+  a:focus-visible { outline: 3px solid var(--serit); outline-offset: 2px; }
+  .not { color: var(--soluk); font-size: 14.5px; }
+  @media (max-width: 480px) { h1 { font-size: 32px; } .karar h2 { font-size: 23px; } body { font-size: 16px; } }
+</style>
+
+<div class="sayfa">
+  <header>
+    <h1>Köprü Kesim Kamera Önerisi</h1>
+    <p class="alt">Mermerin tabladaki yerini ve ölçüsünü kameradan otomatik bulmak için kamera kararı.</p>
+  </header>
+
+  <div class="ozet">
+    <h2>Kısaca</h2>
+    <ul>
+      <li>Kamera tablanın <b>tam üstünde, aşağı bakacak</b> şekilde sabitlenmeli; yaklaşık <span class="olcu">3 m</span> yükseklik.</li>
+      <li>Hareketli kamerayla başlamayalım; sabit kamera daha basit ve daha güvenilir.</li>
+      <li><b>12 MP endüstriyel kamera</b> ve kaliteli sabit lens öneriyoruz; kamera başına yaklaşık <span class="olcu">€500</span>'den başlıyor (lens ve kablo hariç).</li>
+      <li>Masa üzerindeki denemelerde ürün ölçüleri <span class="olcu">0–3 mm</span> hatayla çıktı. Gerçek doğruluk makinedeki kamerayla doğrulanacak.</li>
+    </ul>
+  </div>
+
+  <section class="karar">
+    <h2><span class="no">1</span>Kamera nerede durmalı?</h2>
+    <p class="cevap">Tablanın ortasının tam üstünde, dik aşağı bakacak şekilde, sabit.</p>
+    <ul>
+      <li><b>Neden çapraz değil:</b> eğik bakan kamera tablanın uzak tarafını küçük, yakın tarafını büyük görür. Telefonla yaptığımız eğik çekimlerde ölçüm 3–20 mm saptı. Tepeden bakınca tablanın her yeri aynı ölçekte görünür.</li>
+      <li><b>Yükseklik:</b> tablanın tamamı ve kenarındaki konum etiketleri görüntüye sığmalı. Önerdiğimiz lensle bu yaklaşık <span class="olcu">3 m</span> (daha uzun lensle yaklaşık 4 m).</li>
+      <li><b>Ölçüm anı:</b> köprü tablanın üstünden çekilmiş, park konumunda olmalı. Ölçüm moduna geçince PLC kamerayı çalıştırır, ölçüm ekranda canlı görünür.</li>
+      <li><b>Konum etiketleri:</b> tablanın çevresine 6–8 adet basılı kare etiket yapıştırılır. Kamera biraz oynasa bile program bu etiketlerden tablayı her seferinde yeniden tanır.</li>
+    </ul>
+  </section>
+
+  <section class="karar">
+    <h2><span class="no">2</span>Kamera hareketli olursa ne olur?</h2>
+    <p class="cevap">Daha ayrıntılı görür ama sistem karmaşıklaşır; ilk aşamada önermiyoruz.</p>
+    <ul>
+      <li><b>Artısı:</b> köprüye takılan kamera taşa yakın olduğu için daha ince ayrıntı görür.</li>
+      <li><b>Eksisi:</b> her çekimde makine durmalı, kameranın konumu PLC'den anlık alınmalı, parça parça çekilen görüntüler birleştirilmeli. Kamera kesim suyuna ve çamura çok yakın kalır.</li>
+      <li><b>Karar:</b> sabit kamerayla başlıyoruz. Sahada doğruluk yetmezse hareketli kamerayı ikinci aşamada değerlendiririz.</li>
+    </ul>
+  </section>
+
+  <section class="karar">
+    <h2><span class="no">3</span>Kamera hangi özellikte olmalı?</h2>
+    <ul>
+      <li><b>Çözünürlük:</b> en az <span class="olcu">12 MP</span>. Tablada her nokta yaklaşık 1 mm'lik ayrıntıyla görünür.</li>
+      <li><b>Lens:</b> sabit, zoomsuz, görüntüyü bükmeyen (düşük bozulmalı) lens. Geniş açılı ve balık gözü lens olmaz.</li>
+      <li><b>Ayarlar sabitlenebilmeli:</b> odak ve ışık ayarı kendi kendine değişmemeli.</li>
+      <li><b>Komutla fotoğraf:</b> PLC'den "çek" komutu alabilmeli ve tek tek net fotoğraf verebilmeli.</li>
+      <li><b>Dayanıklılık:</b> su ve toza karşı korumalı kutu (IP65), önünde değiştirilebilir koruma camı.</li>
+      <li><b>Işık:</b> tepeden dağınık LED aydınlatma. Gölge ve ıslak taş parlaması ölçümü bozar.</li>
+    </ul>
+  </section>
+
+  <section class="karar">
+    <h2><span class="no">4</span>Hangi kameraları tercih etmeliyiz?</h2>
+    <h3>Endüstriyel kameralar <span class="etiket">önerilen</span></h3>
+    <div class="tablo">
+      <table>
+        <thead><tr><th>Model</th><th>Neden</th><th>Fiyat</th></tr></thead>
+        <tbody>
+          <tr><td><a href="https://en.daheng-imaging.com/show-106-1997-1.html">Daheng MER2-1220-32U3C</a></td><td>12 MP; PLC'nin "çek" komutu için doğrudan giriş var</td><td>Teklif alınmalı</td></tr>
+          <tr><td><a href="https://www.baslerweb.com/en-us/shop/aca4024-imx226/">Basler ace acA4024-29uc</a></td><td>12 MP; yazılımı ve belgeleri en olgun marka</td><td>€479'dan (liste, KDV hariç)</td></tr>
+          <tr><td><a href="https://www.maxxvision.com/downloads/Cameras/USB30/Hikrobot/Hikrobot_MV-CU120-10UMUC.pdf">Hikrobot MV-CU120-10UC</a></td><td>12 MP; genelde en uygun fiyatlı</td><td>Teklif alınmalı</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="not">Bu kameralara 12 MP'ye uygun, düşük bozulmalı bir lens gerekir; örneğin <a href="https://commonlands.com/products/8mm-c-mount-lens-12mp-cil562">Commonlands CIL562</a> ya da <a href="https://shop.visiondatum.com/products/j-12mp-1-1-7-c-mount-low-distortion-industrial-lens">Vision Datum iLens-MP12</a>. Kamera tavanda olacağı için uzun (aktif) bir USB3 kablo ya da Ethernet bağlantılı model gerekir.</p>
+
+    <h3>Normal (güvenlik tipi) kamera <span class="etiket">daha ucuz</span></h3>
+    <div class="tablo">
+      <table>
+        <thead><tr><th>Model</th><th>Neden</th><th>Dikkat</th></tr></thead>
+        <tbody>
+          <tr><td><a href="https://www.sourcesecurity.com/companies/hikvision/products/ip-cameras/colour-type.401876.html?page=19">Hikvision DS-2CD2T123G2</a></td><td>12 MP, su geçirmez kasası hazır</td><td>Görüntüyü daha çok büker; tek fotoğraf ve ayar kilitleme almadan önce doğrulanmalı</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="not">Önerimiz endüstriyel kamera. Güvenlik kamerası daha ucuzdur ama ölçüm için tasarlanmamıştır; doğruluk riski daha yüksektir.</p>
+  </section>
+
+  <p class="not">Fiyatlar ve model bilgileri üreticilerin ve satıcıların sitelerinden alınmıştır (Kasım 2026); sipariş öncesi güncel teklif alınmalıdır.</p>
+</div>

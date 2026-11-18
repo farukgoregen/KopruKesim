@@ -1,0 +1,14 @@
+# Kose dama tahtalari: A4 sayfa yatay, sayfanin kenarlari tablanin kenarina dayali, sayfanin uzun kenari tablanin uzun kenari (X) boyunca.
+# Isaret=numara,X,Y : desen merkezinin tabla koordinati (mm). Desen sayfanin ortasinda: merkez = kose + (148.5, 105) iceri.
+# Numara: 0 = 0 noktasi kosesi (fotografta sol ust), 1 = fotografta sag ust, 2 = sag alt, 3 = sol alt.
+# Tablayi ve sayfalari mumkunse metreyle olcup merkezleri duzeltin.
+TableLengthMm=2080
+TableWidthMm=1050
+MarkerHeightMm=0
+MarkerSizeMm=250
+Tur=dama
+Desen=9x6
+Isaret=0,148.5,105
+Isaret=1,148.5,945
+Isaret=2,1931.5,945
+Isaret=3,1931.5,105

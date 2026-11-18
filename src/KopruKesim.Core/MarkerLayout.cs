@@ -31,6 +31,17 @@ namespace KopruKesim.Core
         /// <summary>Basili isaretin kenar uzunlugu (mm); yalnizca bilgi ve basma icin.</summary>
         public double MarkerSizeMm = 100;
         public List<MarkerPoint> Markers = new List<MarkerPoint>();
+        /// <summary>Etiket turu: "aruco" (numarali kare kod) ya da "dama" (koselerde ayni dama tahtasi deseni).</summary>
+        public string Kind = "aruco";
+        /// <summary>Dama tahtasinin ic kose sayisi (sutun x satir); 10x7 kareli desen icin 9x6.</summary>
+        public int PatternCols = 9, PatternRows = 6;
+        /// <summary>Dama karesinin tasarim kenar uzunlugu (mm); 0 = bilinmiyor (yalniz merkezler kullanilir).</summary>
+        public double SquareMm = 0;
+        /// <summary>
+        /// Etiket kesim cizgisinden kesilmis (true) ya da A4 sayfanin tamami (false). Kesik etikette baski olcegi
+        /// merkezin koseye uzakligini da kucultur; tam sayfada desen sayfanin ortasinda kalir.
+        /// </summary>
+        public bool CutTag = false;
 
         public void Save(string path)
         {
@@ -42,8 +53,12 @@ namespace KopruKesim.Core
                 "TableLengthMm=" + TableLengthMm.ToString("R", c),
                 "TableWidthMm=" + TableWidthMm.ToString("R", c),
                 "MarkerHeightMm=" + MarkerHeightMm.ToString("R", c),
-                "MarkerSizeMm=" + MarkerSizeMm.ToString("R", c)
+                "MarkerSizeMm=" + MarkerSizeMm.ToString("R", c),
+                "Tur=" + Kind,
+                "Desen=" + PatternCols.ToString(c) + "x" + PatternRows.ToString(c)
             };
+            if (SquareMm > 0) lines.Add("Kare=" + SquareMm.ToString("R", c));
+            if (CutTag) lines.Add("Kesik=1");
             foreach (MarkerPoint m in Markers)
                 lines.Add("Isaret=" + m.Id.ToString(c) + "," + m.X.ToString("R", c) + "," + m.Y.ToString("R", c));
             System.IO.File.WriteAllLines(path, lines);
@@ -67,6 +82,17 @@ namespace KopruKesim.Core
                     case "TableWidthMm": layout.TableWidthMm = double.Parse(val, c); break;
                     case "MarkerHeightMm": layout.MarkerHeightMm = double.Parse(val, c); break;
                     case "MarkerSizeMm": layout.MarkerSizeMm = double.Parse(val, c); break;
+                    case "Tur":
+                        layout.Kind = val.ToLowerInvariant();
+                        if (layout.Kind != "aruco" && layout.Kind != "dama") throw new FormatException("Tur 'aruco' ya da 'dama' olmali: " + val);
+                        break;
+                    case "Desen":
+                        string[] d = val.ToLowerInvariant().Split('x');
+                        if (d.Length != 2) throw new FormatException("Desen 'sutunxsatir' olmali (ic kose sayisi, ornek 9x6): " + val);
+                        layout.PatternCols = int.Parse(d[0], c); layout.PatternRows = int.Parse(d[1], c);
+                        break;
+                    case "Kare": layout.SquareMm = double.Parse(val, c); break;
+                    case "Kesik": layout.CutTag = val == "1" || val.ToLowerInvariant() == "evet"; break;
                     case "Isaret":
                         string[] p = val.Split(',');
                         if (p.Length != 3) throw new FormatException("Isaret satiri 'numara,X,Y' olmali: " + line);
@@ -95,6 +121,12 @@ namespace KopruKesim.Core
         public List<int> Rejected = new List<int>();
         /// <summary>Kullanilan isaretlerin hesaplanan ve tanimli yerleri arasindaki fark (mm).</summary>
         public double RmsMm, MaxMm;
+        /// <summary>Dama ic koseleriyle inceltildiyse: kullanilan nokta sayisi (0 = yalniz merkezler).</summary>
+        public int GridPoints;
+        /// <summary>Tahmin edilen baski olcegi (1 = %100); inceltme yapilmadiysa NaN.</summary>
+        public double PrintScale = double.NaN;
+        /// <summary>Karelerin X yonundeki olcegi / Y yonundeki olcegi; 1'den uzaksa tabla olcusu tutmuyor olabilir.</summary>
+        public double AxisRatio = double.NaN;
         /// <summary>Basarisizsa nedeni (Turkce, kullaniciya gosterilebilir).</summary>
         public string Error;
     }

@@ -203,9 +203,100 @@ static class Program
             Console.WriteLine("    K" + (i + 1) + " " + r.Vertices[i] + "  aci " + r.AnglesDeg[i].ToString("F1") + "  kenar " + r.EdgeLengths[i].ToString("F0") + " mm");
     }
 
+    /// <summary>
+    /// Kose dama etiketleri %95 olcekle basilmis, kesilip koselere dayanmis: merkezler kuculur, kareler 28,5 mm.
+    /// Yalniz merkezlerle (nominal yerlesim) olcek hatali; tum koselerle baski olcegi bulunup duzeltilmeli.
+    /// </summary>
+    static void TestCheckerGrid()
+    {
+        Console.WriteLine("Dama izgarasi ve baski olcegi:");
+        double L = 1500, W = 800, sq = 30, s = 0.95;
+        // Egik kamera: tabla -> goruntu
+        var tableCorners = new[] { new Point2(0, 0), new Point2(0, W), new Point2(L, W), new Point2(L, 0) };
+        var img = new[] { new Point2(1450, 540), new Point2(2300, 550), new Point2(2780, 1690), new Point2(960, 1680) };
+        Homography toImg = Homography.FromPoints(tableCorners, img);
+        var layout = new MarkerLayout { TableLengthMm = L, TableWidthMm = W, Kind = "dama", PatternCols = 4, PatternRows = 3, SquareMm = sq, CutTag = true };
+        var nominal = new[] { new Point2(85, 70), new Point2(85, W - 70), new Point2(L - 85, W - 70), new Point2(L - 85, 70) };
+        var seen = new Dictionary<int, Point2>();
+        var corners = new Dictionary<int, Point2[]>();
+        var rnd = new Random(3);
+        for (int id = 0; id < 4; id++)
+        {
+            layout.Markers.Add(new MarkerPoint(id, nominal[id].X, nominal[id].Y));
+            Point2 corner = tableCorners[id];
+            Point2 center = corner + (nominal[id] - corner) * s;   // gercek (kucuk basilmis) merkez
+            var pts = new Point2[12];
+            // Etiketler 180 derece donuk de olabilir: dedektor sirasi her etikette farkli
+            bool flip = id % 2 == 1;
+            for (int j = 0; j < 3; j++)
+                for (int i = 0; i < 4; i++)
+                {
+                    double ox = (i - 1.5) * sq * s, oy = (j - 1) * sq * s;
+                    if (flip) { ox = -ox; oy = -oy; }
+                    Point2 p = toImg.Transform(center + new Point2(ox, oy));
+                    pts[j * 4 + i] = new Point2(p.X + (rnd.NextDouble() - 0.5) * 0.3, p.Y + (rnd.NextDouble() - 0.5) * 0.3);
+                }
+            corners[id] = pts;
+            seen[id] = toImg.Transform(center);
+        }
+        // A4 kagidin gercek koseleri ve olculen kenari
+        var a4 = new[] { new Point2(600, 300), new Point2(897, 300), new Point2(897, 510), new Point2(600, 510) };
+        Func<MarkerFit, double> a4Length = f =>
+        {
+            Homography h = f.Calibration.ImageToTable;
+            return Point2.Distance(h.Transform(toImg.Transform(a4[0])), h.Transform(toImg.Transform(a4[1])));
+        };
+        MarkerFit fit = MarkerSolver.Solve(layout, seen, 4000, 1800);
+        double before = a4Length(fit);
+        CheckerGridFit.Refine(layout, fit, corners, 4000, 1800);
+        double after = a4Length(fit);
+        Check(fit.GridPoints == 48, "48 ic kose kullanildi: " + fit.GridPoints);
+        Check(Math.Abs(fit.PrintScale - s) < 0.003, "baski olcegi bulundu: " + fit.PrintScale.ToString("F3"));
+        Check(Math.Abs(before - 297) > 1.5, "yalniz merkezlerle A4 hatali: " + before.ToString("F1") + " mm");
+        Check(Math.Abs(after - 297) < 0.5, "tum koselerle A4 dogru: " + after.ToString("F1") + " mm");
+        Check(Math.Abs(fit.AxisRatio - 1) < 0.01, "X/Y olcek orani 1: " + fit.AxisRatio.ToString("F3"));
+    }
+
+    /// <summary>Tabla profili dosyaya yazilip geri okununca ayni kalmali; eksik dosya reddedilmeli.</summary>
+    static void TestTableProfile()
+    {
+        Console.WriteLine("Tabla profili kaydet/oku:");
+        string dir = Path.Combine(Path.GetTempPath(), "kk-profil-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string path = Path.Combine(dir, "profil.txt");
+            var p = new TableProfile
+            {
+                Name = "Deneme\ntabla", TableLengthMm = 1500.5, TableWidthMm = 800, ImageWidth = 4000, ImageHeight = 1800,
+                Corners = new[] { new Point2(1450.25, 540.5), new Point2(2300, 550), new Point2(2780.125, 1690), new Point2(960, 1680.75) }
+            };
+            p.Save(path);
+            TableProfile q = TableProfile.Load(path);
+            Check(q.Name == "Deneme tabla", "ad tek satira indirildi: " + q.Name);
+            Check(q.TableLengthMm == 1500.5 && q.TableWidthMm == 800, "tabla olcusu ayni");
+            Check(q.ImageWidth == 4000 && q.ImageHeight == 1800, "goruntu boyutu ayni");
+            bool same = true;
+            for (int i = 0; i < 4; i++) same &= q.Corners[i].X == p.Corners[i].X && q.Corners[i].Y == p.Corners[i].Y;
+            Check(same, "dort kose birebir ayni ve sirasi korundu");
+
+            string broken = Path.Combine(dir, "eksik.txt");
+            File.WriteAllLines(broken, new[] { "TableLengthMm=1500", "TableWidthMm=800" });
+            bool threw = false;
+            try { TableProfile.Load(broken); } catch (FormatException) { threw = true; }
+            Check(threw, "eksik profil dosyasi FormatException verir");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch (IOException e) { Console.WriteLine("  (gecici klasor silinemedi: " + e.Message + ")"); }
+        }
+    }
+
     static int Main()
     {
         TestHomography();
+        TestCheckerGrid();
+        TestTableProfile();
         TestCameraPose();
         TestShapes();
         TestThickness();

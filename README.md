@@ -28,13 +28,19 @@ dotnet run --project src/KopruKesim.Demo -- olc fotograf.jpg 20
 ```
 dotnet run --project src/KopruKesim.Web --urls http://localhost:5080
 ```
-Sonra tarayıcıda http://localhost:5080 adresini açın. Önce boş tabla fotoğrafıyla kurulum, sonra kalınlık seçip mermer fotoğrafıyla ölçüm yapılır.
+Sonra tarayıcıda http://localhost:5080 adresini açın. Kurulum gerekmez: tabla ölçüsünü ve mermer kalınlığını girip fotoğraf yüklenir. Köşe bulma iki yoldan seçilir:
+- **Dama etiketli** (varsayılan, en kesin): tablanın dört köşesine yazdırılmış dama etiketi konur (PDF'ler `ornek/dama/`, arayüzden de indirilebilir). Etiketler %100 / "Gerçek boyut" ile basılmalı.
+- **Damasız**: köşeler tabla kenarlarından bulunur; sarı noktalar sürüklenerek düzeltilebilir. Doğru bulunan bir fotoğraf "kayıtlı tabla" (profil) olarak saklanabilir; sonraki fotoğraflarda köşeler yüzey deseni eşleştirilerek taşınır. Taşınan köşeler tabla kenarlarına oturmazsa profil kullanılmaz ve köşeler otomatik bulunur.
+
+Telefon kamerası için ağ modu: `baslat_ag.bat` (https, yerel ağ). Ağ modunda kimlik doğrulama yoktur; yalnız güvenilir yerel ağda kullanın.
+
+Ölçümler, kalibrasyon ve kayıtlı tablalar `src/KopruKesim.Web/veri/` altında tutulur (git dışı). Ayrıntılı ve güncel durum: `CLAUDE.md`, geçmiş: `docs/gelistirme-notlari.md`.
 
 ## Ölçüler
-- Tabla 3300 × 2000 mm (gerçek ölçü).
+- Tabla ölçüsü arayüzde girilir (deneme masası 1500 × 800 mm; atölye tablası 3300 × 2000 mm).
 - Mermer kalınlığı parçaya göre değişir (0 ve üstü, serbest sayı); Demo'da sayısal argüman olarak verilir, verilmezse 20 mm (`TableCalibration.SlabThicknessMm`).
 
-## Varsayımlar (güncellenecek)
+## Varsayımlar (Demo / kurulumlu eski akış)
 - Kurulumdan sonra `kalibrasyon_onizleme.jpg` gözle kontrol edilmeli; kamera yerinden oynarsa kurulum tekrarlanır.
 - Otomatik köşe bulma yalnızca boş tabloda güvenilir; tutmazsa `--tikla` ya da `--koseler x,y x,y x,y x,y` (sol üst = 0 noktası, sağ üst, sağ alt, sol alt).
 
