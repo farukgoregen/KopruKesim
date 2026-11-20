@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using KopruKesim.Core;
 
 // NuGet gerektirmeyen basit test kosucusu: "dotnet run --project tests/KopruKesim.Tests"
@@ -292,10 +293,63 @@ static class Program
         }
     }
 
+    /// <summary>
+    /// Iki fotografli olcumun yarim fotografi: 2 kose + 2 orta etiket (ortalar 90 derece cevrik). Etiketler karisik
+    /// sirayla gelir; dogru eslestirme bulunmali. Ortalar cevrik konmamissa (yanlis yerlesim) reddedilmeli.
+    /// </summary>
+    static void TestHalfView()
+    {
+        Console.WriteLine("Yarim fotograf (6 etiket):");
+        double L = 1500, W = 800, sq = 30;
+        var layout = new MarkerLayout { TableLengthMm = L, TableWidthMm = W, Kind = "dama", PatternCols = 4, PatternRows = 3, SquareMm = sq, MarkerSizeMm = 170, CutTag = true, StrictOrientation = true };
+        layout.Markers.Add(new MarkerPoint(0, 85, 70)); layout.Markers.Add(new MarkerPoint(1, 85, W - 70));
+        layout.Markers.Add(new MarkerPoint(2, L - 85, W - 70)); layout.Markers.Add(new MarkerPoint(3, L - 85, 70));
+        layout.Markers.Add(new MarkerPoint(4, 70, W / 2)); layout.Markers.Add(new MarkerPoint(5, L - 70, W / 2));
+        layout.Rotated.Add(4); layout.Rotated.Add(5);
+        // Y = 0 yarisini goren egik kamera (tabla -> goruntu)
+        var tab = new[] { new Point2(0, 0), new Point2(0, W / 2), new Point2(L, W / 2), new Point2(L, 0) };
+        var img = new[] { new Point2(1700, 300), new Point2(1850, 1000), new Point2(80, 1010), new Point2(230, 310) };
+        Homography toImg = Homography.FromPoints(tab, img);
+        Func<int, bool, Point2[]> board = (id, rotated) =>
+        {
+            var m = layout.Markers.First(k => k.Id == id);
+            var pts = new List<Point2>();
+            int nx = rotated ? 3 : 4, ny = rotated ? 4 : 3;
+            for (int j = 0; j < ny; j++)
+                for (int i = 0; i < nx; i++)
+                    pts.Add(toImg.Transform(new Point2(m.X + (i - (nx - 1) / 2.0) * sq, m.Y + (j - (ny - 1) / 2.0) * sq)));
+            return pts.ToArray();
+        };
+        int[] order = { 5, 0, 3, 4 };   // dedektorun karisik sirasi
+        Func<bool, MarkerFit> solve = midsRotated =>
+        {
+            var centers = new List<Point2>(); var corners = new List<Point2[]>();
+            foreach (int id in order)
+            {
+                var m = layout.Markers.First(k => k.Id == id);
+                centers.Add(toImg.Transform(new Point2(m.X, m.Y)));
+                corners.Add(board(id, id >= 4 && midsRotated));
+            }
+            return HalfViewSolver.Solve(layout, new[] { 0, 4, 5, 3 }, centers, corners, 1920, 1080, -1);
+        };
+        MarkerFit fit = solve(true);
+        bool ok = fit.Calibration != null;
+        Check(ok && fit.Used.OrderBy(i => i).SequenceEqual(new[] { 0, 3, 4, 5 }), "dort etiket eslesti: " + (ok ? string.Join(",", fit.Used) : fit.Error));
+        if (ok)
+        {
+            Homography h = fit.Calibration.ImageToTable;
+            Point2 p = h.Transform(toImg.Transform(new Point2(700, 250)));
+            Check(Point2.Distance(p, new Point2(700, 250)) < 0.5, "tabla noktasi dogru yerde: " + p);
+            Check(fit.RmsMm < 0.1 && fit.GridPoints == 48, "48 ic kose, izgara hatasi " + fit.RmsMm.ToString("F3") + " mm");
+        }
+        Check(solve(false).Calibration == null, "orta etiketler cevrik degilse reddedildi");
+    }
+
     static int Main()
     {
         TestHomography();
         TestCheckerGrid();
+        TestHalfView();
         TestTableProfile();
         TestCameraPose();
         TestShapes();

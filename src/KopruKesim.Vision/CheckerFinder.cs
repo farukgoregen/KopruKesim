@@ -43,6 +43,16 @@ namespace KopruKesim.Vision
         }
 
         /// <param name="corners">Her desenin ic koseleri (tam cozunurluk, piksel), ayni numarayla.</param>
+        /// <summary>Fotograftaki butun desenler (numarasiz): merkez ve ic koseler. Iki fotografli olcumde kullanilir.</summary>
+        public static List<KeyValuePair<Point2, Point2[]>> FindAll(Mat frame, int innerCols, int innerRows)
+        {
+            using (var gray = new Mat())
+            {
+                if (frame.Channels() == 1) frame.CopyTo(gray); else Cv2.CvtColor(frame, gray, ColorConversionCodes.BGR2GRAY);
+                return FindBoards(gray, innerCols, innerRows).Select(b => new KeyValuePair<Point2, Point2[]>(b.Center, b.Corners)).ToList();
+            }
+        }
+
         public static Dictionary<int, Point2> Find(Mat frame, int innerCols, int innerRows, out Dictionary<int, Point2[]> corners, int maxBoards = 4)
         {
             corners = new Dictionary<int, Point2[]>();
@@ -172,8 +182,27 @@ namespace KopruKesim.Vision
         /// <summary>Kaba yerin cevresini kirpar, kareler yeterince buyuk gorunecek kadar buyutup deseni yeniden arar.</summary>
         private static Board Refine(Mat gray, Rect rough, Size size)
         {
+            Board b = RefineIn(gray, rough, size, 1.0);
+            // Etiket tabla kenarindaysa beyaz payi koyu zemine deger; genis kirpmada dedektor bu siniri fazladan bir
+            // kare sirasi sanip izgarayi kaydirabilir (sapma ~0,2). Daha dar kirpmayla yeniden aranir.
+            // 90 derece cevrik konmus etikette ic koseler sutun x satir yerine satir x sutun dizilir; dedektor bu
+            // durumda istenen boyutu kenardaki noktalarla doldurup kaymis bir izgara verebilir. Cevrik boyut da denenir.
+            var swapped = new Size(size.Height, size.Width);
+            if (b == null || b.Residual > 0.08)
+            {
+                foreach (var t in new[] { RefineIn(gray, rough, swapped, 1.0), RefineIn(gray, b != null ? b.Box : rough, size, 0.55) })
+                {
+                    if (Debug) Console.WriteLine("  dama yeniden: {0}", t == null ? "bulunamadi" : "sapma " + t.Residual.ToString("F3"));
+                    if (t != null && (b == null || t.Residual < b.Residual)) b = t;
+                }
+            }
+            return b;
+        }
+
+        private static Board RefineIn(Mat gray, Rect rough, Size size, double padFactor)
+        {
             // Etiketin tamami (dis kareler + beyaz pay) kirpmaya girsin
-            int padX = rough.Width + 20, padY = rough.Height + 20;
+            int padX = (int)(rough.Width * padFactor) + (padFactor >= 1 ? 20 : 4), padY = (int)(rough.Height * padFactor) + (padFactor >= 1 ? 20 : 4);
             int x0 = Math.Max(0, rough.X - padX), y0 = Math.Max(0, rough.Y - padY);
             int x1 = Math.Min(gray.Cols, rough.X + rough.Width + padX), y1 = Math.Min(gray.Rows, rough.Y + rough.Height + padY);
             var area = new Rect(x0, y0, x1 - x0, y1 - y0);
@@ -183,7 +212,9 @@ namespace KopruKesim.Vision
             double stepY = rough.Height / (double)Math.Max(1, Math.Max(size.Width, size.Height) - 1);
             double fx = Clamp(TargetSquarePx / Math.Max(1, stepX), 0.25, 6), fy = Clamp(TargetSquarePx / Math.Max(1, stepY), 0.25, 6);
             double f = Math.Max(fx, fy);
-            var tries = new[] { new[] { f, f }, new[] { fx, fy }, new[] { 1.0, 1.0 }, new[] { Math.Min(6, f * 1.5), Math.Min(6, f * 1.5) } };
+            // 2x: tabla kenarinda koyu zemine degen, egik gorunen etikette dedektor kucuk olcekte kenar noktalarini
+            // ic kose sanabiliyor; buyutulunce dogru izgarayi buluyor (sanal iki fotografli deneme, 2026-11-20).
+            var tries = new[] { new[] { f, f }, new[] { fx, fy }, new[] { 1.0, 1.0 }, new[] { Math.Min(6, f * 1.5), Math.Min(6, f * 1.5) }, new[] { Math.Min(6, f * 2), Math.Min(6, f * 2) } };
 
             Board best = null;
             using (var crop = new Mat(gray, area))

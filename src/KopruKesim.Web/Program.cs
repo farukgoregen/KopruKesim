@@ -156,6 +156,44 @@ app.MapPost("/api/tablalar/sil", async (HttpRequest req) =>
     }
 });
 
+// ---------- IP kamera (Dahua, RTSP) ----------
+// Arayuz kameradan taze bir kare alir (/api/kamera/kare) ve onu fotograf gibi /api/olc'ye gonderir; boylece
+// cizim, kayit ve tum olcum yollari ayni kalir. Sifre yalniz bellekte (IpCamera), hicbir yere yazilmaz.
+var camera = new IpCamera();
+app.Lifetime.ApplicationStopping.Register(() => camera.Dispose());
+
+app.MapGet("/api/kamera", () => Results.Json(camera.Status()));
+
+app.MapPost("/api/kamera", async (HttpRequest req) =>
+{
+    IFormCollection form = await req.ReadFormAsync();
+    int port = int.TryParse(form["port"], out int pp) && pp > 0 && pp < 65536 ? pp : 554;
+    int channel = int.TryParse(form["kanal"], out int ch) && ch > 0 ? ch : 1;
+    int subtype = form["akis"] == "1" ? 1 : 0;
+    try { camera.Configure(form["adres"], port, form["kullanici"], form["sifre"], channel, subtype); }
+    catch (ArgumentException e) { return Fail(e.Message); }
+    // Ilk kareyi kisa bir sure bekle: arayuz hemen "bagli" ya da hatayi gostersin
+    using (Mat first = camera.FreshFrame(TimeSpan.FromSeconds(8))) { }
+    return Results.Json(camera.Status());
+});
+
+app.MapPost("/api/kamera/kapat", () => { camera.Stop(); return Results.Json(camera.Status()); });
+
+// Taze kare (JPEG). Olcum icin kalite yuksek; onizleme icin "onizleme=1" kucuk ve hizli.
+app.MapGet("/api/kamera/kare", (HttpRequest req) =>
+{
+    using Mat frame = camera.FreshFrame(TimeSpan.FromSeconds(5));
+    if (frame == null) return Results.Json(new { hata = "Kameradan kare alınamadı. Kamera bağlı mı?" }, statusCode: 503);
+    bool preview = req.Query["onizleme"] == "1";
+    if (preview && frame.Cols > 960)
+    {
+        using var small = new Mat();
+        Cv2.Resize(frame, small, new Size(), 960.0 / frame.Cols, 960.0 / frame.Cols, InterpolationFlags.Area);
+        return Results.File(small.ImEncode(".jpg", new ImageEncodingParam(ImwriteFlags.JpegQuality, 80)), "image/jpeg");
+    }
+    return Results.File(frame.ImEncode(".jpg", new ImageEncodingParam(ImwriteFlags.JpegQuality, preview ? 80 : 95)), "image/jpeg");
+});
+
 // Olcum: tabladaki parcalarin koseleri (mm) ve ustten gorunum
 app.MapPost("/api/olc", async (HttpRequest req) =>
 {
@@ -167,6 +205,9 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
     // Kose dama etiketleri: "kucuk", "buyuk" ya da "normal"; yerlesim tabla olcusunden uretilir.
     // Bos ise damasiz: tabla koseleri fotograftan (otomatik, elle ya da kayitli tabladan) bulunur.
     string checker = form["dama"].ToString();
+    // "otomatik": etiket turu bilinmiyor; kucukten baslanir, dort etiket cikmazsa digerleri denenir (asagida)
+    bool autoChecker = checker == "otomatik";
+    if (autoChecker) checker = "kucuk";
     double formLength = double.TryParse(form["uzunluk"], NumberStyles.Float, inv, out double fl) && fl > 0 ? fl : 0;
     double formWidth = double.TryParse(form["genislik"], NumberStyles.Float, inv, out double fw) && fw > 0 ? fw : 0;
     double margin = double.TryParse(form["kenar"], NumberStyles.Float, inv, out double m) ? m : 40;
@@ -177,9 +218,19 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
         string profileId = form["profil"].ToString();
         bool hasProfile = checkerless && ValidProfileId(profileId) && File.Exists(Path.Combine(ProfileFolder(profileId), "profil.txt"));
         if (!hasProfile && (formLength <= 0 || formWidth <= 0)) return Fail("Tablanın uzunluğunu ve genişliğini girin.");
-        MarkerLayout layout = checkerless ? null : CheckerLayout(formLength, formWidth, checker);
+        // Iki fotografli olcum (6 etiket): "dosya" tablanin Y = 0 (sol uzun kenar) yarisi, "dosya2" Y = genislik
+        // (sag uzun kenar) yarisi. Her biri kendi 4 etiketiyle kalibre edilir, mm izgarasinda birlestirilir.
+        IFormFile second = form.Files.GetFile("dosya2");
+        bool twoView = !checkerless && second != null && second.Length > 0;
+        byte[] bytes2 = null;
+        if (twoView) { using var ms2 = new MemoryStream(); second.CopyTo(ms2); bytes2 = ms2.ToArray(); }
+        MarkerLayout layout = checkerless ? null : CheckerLayout(formLength, formWidth, checker, twoView);
         using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
         if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
+        using Mat frame2 = twoView ? Cv2.ImDecode(bytes2, ImreadModes.Color) : null;
+        if (twoView && frame2.Empty()) return Fail("2. fotoğraf bir görüntü olarak okunamadı.");
+        int[] lowIds = { 0, 4, 5, 3 }, highIds = { 4, 1, 2, 5 };   // CheckerLayout(..., twoView) numaralari
+        MarkerFit lowFit = null, highFit = null;
 
         // Kenar puruzu toleransi genis: kameraya bakan kenarda yan yuzey ve golge kenari dalgalandirir
         var options = new DetectorOptions
@@ -269,22 +320,31 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
                 }
             }
         }
+        MeasureOutput RunTags(MarkerLayout l)
+        {
+            if (!twoView) return TableMeasure.RunWithTags(frame, l, options, thickness);
+            MeasureOutput r = TableMeasure.RunTwoViews(frame, frame2, l, lowIds, highIds, options, thickness, out MarkerFit lf, out MarkerFit hf);
+            lowFit = lf; highFit = hf;
+            return r;
+        }
         if (attempt == null)
             attempt = checkerless
                 ? TableMeasure.RunSingle(frame, formLength, formWidth, options, thickness)
-                : TableMeasure.RunWithTags(frame, layout, options, thickness);
-        // Secilen etiket turunde dort etiket cikmazsa digerleri denenir: yanlis tur secmek olcumu bozmasin
+                : RunTags(layout);
+        // Secilen etiket turunde etiketler cikmazsa digerleri denenir: yanlis tur secmek olcumu bozmasin
         string usedChecker = checker;
-        if (layout != null && layout.Kind == "dama" && checker != "" && attempt.Error != null && attempt.Error.StartsWith("Yeterli isaret"))
+        if (layout != null && layout.Kind == "dama" && checker != "" && attempt.Error != null && (twoView || attempt.Error.StartsWith("Yeterli isaret")))
         {
+            MarkerFit keepLow = lowFit, keepHigh = highFit;
             foreach (string other in new[] { "kucuk", "buyuk", "normal" })
             {
                 if (other == checker) continue;
-                MarkerLayout l2 = CheckerLayout(formLength, formWidth, other);
-                MeasureOutput r2 = TableMeasure.RunWithTags(frame, l2, options, thickness);
-                if (r2.Error == null) { attempt.Dispose(); attempt = r2; layout = l2; usedChecker = other; break; }
+                MarkerLayout l2 = CheckerLayout(formLength, formWidth, other, twoView);
+                MeasureOutput r2 = RunTags(l2);
+                if (r2.Error == null) { attempt.Dispose(); attempt = r2; layout = l2; usedChecker = other; keepLow = lowFit; keepHigh = highFit; break; }
                 r2.Dispose();
             }
+            lowFit = keepLow; highFit = keepHigh;
         }
         // Elle nokta verilmediyse: bulunan dortgenin her kenarina noktalar konup oturtulur; kenarlarin ne kadar
         // duz oldugu gosterilir ve kullanici bu noktalardan baslayarak duzeltebilir.
@@ -345,12 +405,25 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             uyumlu = profileMatch.Inliers,
             hataPx = double.IsNaN(profileMatch.RmsPx) ? (double?)null : Math.Round(profileMatch.RmsPx, 2)
         };
+        // Iki fotografli olcumde her fotografin kendi kalibrasyonu: kullanilan etiketler, izgara hatasi, kamera konumu
+        object HalfInfo(MarkerFit f) => f == null ? null : new
+        {
+            basarili = f.Calibration != null,
+            kullanilan = f.Used,
+            noktalar = f.GridPoints,
+            ortalamaMm = Math.Round(f.RmsMm, 2),
+            enKotuMm = Math.Round(f.MaxMm, 2),
+            baskiOlcegi = double.IsNaN(f.PrintScale) ? (double?)null : Math.Round(f.PrintScale, 3),
+            kamera = f.Calibration?.Camera == null ? null : new { x = Math.Round(f.Calibration.Camera.X), y = Math.Round(f.Calibration.Camera.Y), z = Math.Round(f.Calibration.Camera.Height) },
+            tablaKoseleri = f.Calibration == null ? null : new[] { f.Calibration.CornerOrigin, f.Calibration.CornerYEnd, f.Calibration.CornerFar, f.Calibration.CornerXEnd }.Select(P)
+        };
+        var ikiFoto = twoView ? new { foto1 = HalfInfo(lowFit), foto2 = HalfInfo(highFit) } : null;
         if (result.Error != null)
         {
             var failNotes = new List<string>();
             if (profileNote != null) failNotes.Add(profileNote);
-            SaveMeasurement(bytes, thickness, formLength, formWidth, result, null, failNotes, checker);   // basarisiz olcum de incelensin
-            return Results.Json(new { hata = TurkceHata(result.Error), isaretler, profil }, statusCode: 400);
+            SaveMeasurement(bytes, thickness, formLength, formWidth, result, null, failNotes, checker, bytes2);   // basarisiz olcum de incelensin
+            return Results.Json(new { hata = TurkceHata(result.Error), isaretler, profil, ikiFoto }, statusCode: 400);
         }
         List<SlabResult> slabs = result.Slabs;
         // Guven: tabla koseleri ne kadar guvenilir bulundu (kenar destegi + kamera tutarliligi).
@@ -383,9 +456,9 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
         // yalniz belirgin bozuklukta (0,38 gibi: kenar yanlis cizgiye oturmus) uyar.
         if (result.Markers == null && consistency != null && (consistency < 0.6 || consistency > 1.6))
             uyarilar.Add($"Tabla köşeleri kamera geometrisiyle tam uyuşmuyor (tutarlılık {consistency:F2}). Köşeler ya da girilen tabla ölçüsü hatalı olabilir; Fotoğraf sekmesinde sarı çerçeveyi kontrol edin.");
-        if (usedChecker != checker)
+        if (usedChecker != checker && !autoChecker)
             uyarilar.Insert(0, $"Seçili etiket türü ({checkerName(checker)}) fotoğraftaki etiketlere uymadı; etiketler {checkerName(usedChecker)} olarak tanındı ve ölçüm buna göre yapıldı. Ayarlardan doğru türü seçebilirsiniz.");
-        string logId = SaveMeasurement(bytes, thickness, formLength, formWidth, result, consistency, uyarilar, usedChecker);
+        string logId = SaveMeasurement(bytes, thickness, formLength, formWidth, result, consistency, uyarilar, usedChecker, bytes2);
         TableCalibration used = result.Calibration;
         string image = "data:image/jpeg;base64," + Convert.ToBase64String(result.Rectified.ToBytes(".jpg"));
         return Results.Json(new
@@ -409,6 +482,8 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             uyarilar,
             profil,
             koseKaynagi = edgeManual ? "noktalar" : result.ProfileMatched ? "profil" : manualCorners != null ? "elle" : checkerless ? "otomatik" : "etiket",
+            etiketTuru = checkerless ? null : usedChecker,
+            ikiFoto,
             kenarlar = edgeFit?.Edges?.Select(e => new
             {
                 noktalar = e.Points.Select((pt, i) => new object[] { Math.Round(pt.X, 2), Math.Round(pt.Y, 2), Math.Round(e.Residuals[i], 2), e.Inlier[i], e.Snapped[i] }),
@@ -438,7 +513,10 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
 
 // Tablanin dort kosesine A4 yatay dama etiketi: sayfa kenarlari tabla kenarina dayali, sayfanin uzun kenari
 // tablanin uzun kenari (X) boyunca. Desen sayfanin ortasinda: merkez = kose + (148.5, 105) mm iceri.
-static MarkerLayout CheckerLayout(double lengthMm, double widthMm, string type)
+// sixTags: iki fotografli olcum icin kisa kenarlarin ortasina iki etiket daha (numara 4: X = 0 kenari, 5: X = uzunluk
+// kenari), 90 derece cevrik: etiketin uzun kenari tablanin kisa kenari (Y) boyunca. Cevrik oldugu icin koseler ve
+// ortalar birbirinden ayrilir.
+static MarkerLayout CheckerLayout(double lengthMm, double widthMm, string type, bool sixTags = false)
 {
     // Etiket kenarlari tabla kenarina dayali, etiketin uzun kenari tablanin uzun kenari (X) boyunca.
     // buyuk/normal: A4 sayfanin tamami (297 x 210); kucuk: kesim cizgisinden kesilmis 170 x 140 mm etiket.
@@ -455,6 +533,14 @@ static MarkerLayout CheckerLayout(double lengthMm, double widthMm, string type)
     l.Markers.Add(new MarkerPoint(1, hx, widthMm - hy));
     l.Markers.Add(new MarkerPoint(2, lengthMm - hx, widthMm - hy));
     l.Markers.Add(new MarkerPoint(3, lengthMm - hx, hy));
+    if (sixTags)
+    {
+        // Cevrik etiket kenara kisa kenariyla dayanir: merkezi kenardan hy (etiketin kisa yarisi) iceride
+        l.Markers.Add(new MarkerPoint(4, hy, widthMm / 2));
+        l.Markers.Add(new MarkerPoint(5, lengthMm - hy, widthMm / 2));
+        l.Rotated.Add(4); l.Rotated.Add(5);
+        l.StrictOrientation = true;
+    }
     return l;
 }
 
@@ -469,7 +555,7 @@ app.MapGet("/api/etiket/{tur}", (string tur) =>
 
 // Olcum kaydi: her olcumun fotografi ve sonucu veri/olcumler altinda saklanir (git disi, yalniz bu bilgisayarda).
 // Sapan olcumleri sonradan inceleyebilmek icin. En fazla 300 olcum tutulur; eskileri silinir.
-string SaveMeasurement(byte[] photo, double thicknessMm, double lengthMm, double widthMm, MeasureOutput r, double? consistency, List<string> warnings, string tagType)
+string SaveMeasurement(byte[] photo, double thicknessMm, double lengthMm, double widthMm, MeasureOutput r, double? consistency, List<string> warnings, string tagType, byte[] photo2 = null)
 {
     try
     {
@@ -477,6 +563,7 @@ string SaveMeasurement(byte[] photo, double thicknessMm, double lengthMm, double
         Directory.CreateDirectory(dir);
         string id = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
         File.WriteAllBytes(Path.Combine(dir, id + ".jpg"), photo);
+        if (photo2 != null) File.WriteAllBytes(Path.Combine(dir, id + "_2.jpg"), photo2);   // iki fotografli olcumun 2. fotografi
         var c = r.Calibration;
         var info = new
         {
@@ -494,11 +581,13 @@ string SaveMeasurement(byte[] photo, double thicknessMm, double lengthMm, double
             parcalar = r.Slabs.Select(s => new { s.Method, s.IsReliable, kenarlar = s.EdgeLengths, koseler = s.Vertices.Select(P) })
         };
         File.WriteAllText(Path.Combine(dir, id + ".json"), System.Text.Json.JsonSerializer.Serialize(info, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-        foreach (string old in Directory.GetFiles(dir, "*.jpg").OrderByDescending(f => f).Skip(300))
+        foreach (string old in Directory.GetFiles(dir, "*.jpg").Where(f => !f.EndsWith("_2.jpg")).OrderByDescending(f => f).Skip(300))
         {
             File.Delete(old);
             string js = Path.ChangeExtension(old, ".json");
             if (File.Exists(js)) File.Delete(js);
+            string p2 = Path.Combine(Path.GetDirectoryName(old), Path.GetFileNameWithoutExtension(old) + "_2.jpg");
+            if (File.Exists(p2)) File.Delete(p2);
         }
         return id;
     }
@@ -507,6 +596,9 @@ string SaveMeasurement(byte[] photo, double thicknessMm, double lengthMm, double
 
 // Cekirdek kutuphanenin ASCII mesajlarini arayuz icin Turkce harflere cevirir
 static string TurkceHata(string m) => m
+    .Replace("1. fotograf (Y = 0 tarafi): ", "1. fotoğraf (sol uzun kenar, Y = 0): ").Replace("2. fotograf (Y = genislik tarafi): ", "2. fotoğraf (sağ uzun kenar, Y = genişlik): ")
+    .Replace("Etiketler bu yarinin yerlesimine uymuyor. Ortadaki iki etiket 90 derece cevrik (uzun kenari tablanin kisa kenari boyunca) konmali; fotografta bu yarinin iki kose etiketi ve iki orta etiketi gorunmeli.",
+             "Etiketler bu yarının yerleşimine uymuyor. Kısa kenarların ortasındaki iki etiket 90° çevrik (uzun kenarı tablanın kısa kenarı boyunca) konmalı; fotoğrafta bu yarının iki köşe etiketi ve iki orta etiketi görünmeli.")
     .Replace("Yeterli isaret gorunmuyor: ", "Köşe etiketlerinden yalnızca ").Replace(" bulundu, en az 4 gerekli.", " tanesi bulundu; dört köşedeki etiketin dördü de fotoğrafta net ve yeterince büyük görünmeli.").Replace("bulundu", "bulundu")
     .Replace("Isaretler birbiriyle uyusmuyor", "İşaretler birbiriyle uyuşmuyor").Replace("en buyuk fark", "en büyük fark")
     .Replace("Bir isaret yerinden oynamis olabilir; daha fazla isaret gorunur olmali.", "Bir işaret yerinden oynamış olabilir; daha fazla işaret görünür olmalı.")

@@ -43,7 +43,8 @@ namespace KopruKesim.Core
                 foreach (int id in boards)
                 {
                     Point2 center = Center(layout, markers[id], s);
-                    Point2[] off = Snap(corners[id].Select(p => h.Transform(p) - center).ToArray(), cols, rows, layout.SquareMm * s);
+                    bool? along = layout.StrictOrientation ? !layout.Rotated.Contains(id) : (bool?)null;
+                    Point2[] off = Snap(corners[id].Select(p => h.Transform(p) - center).ToArray(), cols, rows, layout.SquareMm * s, along);
                     if (off != null) current[id] = off.Select(o => o * (1 / s)).ToArray();
                 }
                 if (current.Count < 3) break;   // izgara oturmadi: merkezlerle yetin
@@ -113,25 +114,28 @@ namespace KopruKesim.Core
             fit.AxisRatio = oxx > 0 && oyy > 0 && oy > 0 ? (ox / oxx) / (oy / oyy) : double.NaN;
         }
 
-        /// <summary>Etiket merkezi: etiket tabla kosesine dayali; kesik etikette baski olcegiyle koseden uzakligi kuculur.</summary>
+        /// <summary>
+        /// Etiket merkezi: etiket tabla kosesine (ya da kenarin ortasindaysa kenara) dayali; kesik etikette baski
+        /// olcegiyle dayandigi noktaya uzakligi kuculur.
+        /// </summary>
         private static Point2 Center(MarkerLayout layout, Point2 nominal, double s)
         {
             if (!layout.CutTag) return nominal;
-            double cx = nominal.X < layout.TableLengthMm / 2 ? 0 : layout.TableLengthMm;
-            double cy = nominal.Y < layout.TableWidthMm / 2 ? 0 : layout.TableWidthMm;
-            var corner = new Point2(cx, cy);
-            return corner + (nominal - corner) * s;
+            Point2 anchor = layout.AnchorOf(nominal.X, nominal.Y);
+            return anchor + (nominal - anchor) * s;
         }
 
         /// <summary>
         /// Merkeze gore konumlari (mm) en yakin izgara noktasina oturtur. Desenin uzun yonu tablanin X ya da Y
         /// yonunde olabilir; ikisi de denenir. Her nokta ayri bir izgara noktasina oturmazsa null.
         /// </summary>
-        private static Point2[] Snap(Point2[] rel, int cols, int rows, double square)
+        /// <param name="along">Desen yonu biliniyorsa: true = sutunlar X yonunde, false = Y yonunde; null = ikisi de denenir.</param>
+        private static Point2[] Snap(Point2[] rel, int cols, int rows, double square, bool? along = null)
         {
             Point2[] best = null; double bestErr = double.MaxValue;
             foreach (bool colsAlongX in new[] { true, false })
             {
+                if (along.HasValue && along.Value != colsAlongX) continue;
                 int nx = colsAlongX ? cols : rows, ny = colsAlongX ? rows : cols;
                 var used = new HashSet<int>();
                 var res = new Point2[rel.Length];

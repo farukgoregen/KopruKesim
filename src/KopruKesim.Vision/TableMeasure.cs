@@ -155,12 +155,15 @@ namespace KopruKesim.Vision
             // Etiketin kareleri, kenari ya da yanindaki tabla disi bolgeyle birlesen leke etiket alanina tasar;
             // kosesinin cogu (ya da agirlik merkezi) etiket alaninda kalan parca etikettir.
             const double pad = 25;
+            // Kenarin ortasindaki etikette dayanilan nokta kenar uzerindedir; o eksende etiketin yari boyu
+            // (kose etiketinden cikarilan) kullanilir.
+            double halfAlong = layout.MarkerSizeMm > 0 ? layout.MarkerSizeMm / 2 : 100;
             var zones = layout.Markers.Select(m =>
             {
-                double cx = m.X < layout.TableLengthMm / 2 ? 0 : layout.TableLengthMm;
-                double cy = m.Y < layout.TableWidthMm / 2 ? 0 : layout.TableWidthMm;
-                double ex = 2 * m.X - cx, ey = 2 * m.Y - cy;
-                return new[] { Math.Min(cx, ex) - pad, Math.Min(cy, ey) - pad, Math.Max(cx, ex) + pad, Math.Max(cy, ey) + pad };
+                Point2 a = layout.AnchorOf(m.X, m.Y);
+                double hx = Math.Abs(m.X - a.X) > 1e-6 ? Math.Abs(m.X - a.X) : halfAlong;
+                double hy = Math.Abs(m.Y - a.Y) > 1e-6 ? Math.Abs(m.Y - a.Y) : halfAlong;
+                return new[] { m.X - hx - pad, m.Y - hy - pad, m.X + hx + pad, m.Y + hy + pad };
             }).ToList();
             Func<Point2, bool> inTag = p => zones.Any(z => p.X >= z[0] && p.X <= z[2] && p.Y >= z[1] && p.Y <= z[3]);
             slabs.RemoveAll(s =>
@@ -169,6 +172,133 @@ namespace KopruKesim.Vision
                 Point2 c = PolygonMath.Centroid(s.Vertices);
                 return inTag(c) || s.Vertices.Count(inTag) * 2 >= s.Vertices.Length;
             });
+        }
+
+        /// <summary>
+        /// Iki fotografli olcum (6 etiket): <paramref name="lowHalf"/> tablanin Y = 0 tarafindaki yarisini,
+        /// <paramref name="highHalf"/> Y = genislik tarafindaki yarisini gorur. Her fotograf kendi 4 etiketiyle
+        /// (iki kose + kisa kenarlarin ortasindaki iki etiket) ayri kalibre edilir; iki fotograf mm izgarasinda
+        /// (ustten gorunum) birlestirilir. Dikis tablanin orta cizgisidir (Y = genislik / 2); orta etiketler iki
+        /// fotografta da ayni yerde oldugu icin dikis onlara kilitlidir. Olcum birlesik gorunumde yapilir; dikisten
+        /// gecen parca tek parca bulunur. Kalinlik duzeltmesinde her parca kendi yarisinin kamerasini kullanir.
+        /// </summary>
+        /// <param name="lowIds">Y = 0 yarisinin 4 etiketi, tabladaki dortgen boyunca sirayla.</param>
+        /// <param name="highIds">Y = genislik yarisinin 4 etiketi, sirayla.</param>
+        public static MeasureOutput RunTwoViews(Mat lowHalf, Mat highHalf, MarkerLayout layout, int[] lowIds, int[] highIds,
+            DetectorOptions options, double thicknessMm, out MarkerFit lowFit, out MarkerFit highFit)
+        {
+            var output = new MeasureOutput();
+            lowFit = SolveHalf(lowHalf, layout, lowIds, -1);
+            highFit = SolveHalf(highHalf, layout, highIds, +1);
+            if (lowFit.Calibration == null) { output.Error = "1. fotograf (Y = 0 tarafi): " + lowFit.Error; output.Markers = lowFit; return output; }
+            if (highFit.Calibration == null) { output.Error = "2. fotograf (Y = genislik tarafi): " + highFit.Error; output.Markers = highFit; return output; }
+
+            double L = layout.TableLengthMm, W = layout.TableWidthMm;
+            // Olcek: iki fotograftan dogal cozunurlugu yuksek olan (ayrinti kaybolmasin), piksel siniri icinde
+            double k = Math.Max(SlabDetector.AutoScale(lowFit.Calibration, options.MaxRectifiedPixels),
+                                SlabDetector.AutoScale(highFit.Calibration, options.MaxRectifiedPixels));
+            k = Math.Min(k, Math.Sqrt(options.MaxRectifiedPixels / (L * W)));
+            int cw = (int)Math.Round(L * k), ch = (int)Math.Round(W * k);
+            var size = new Size(cw, ch);
+            Mat canvas = new Mat(size, MatType.CV_8UC3, Scalar.All(0));
+            using (var lowTop = new Mat())
+            using (var highTop = new Mat())
+            using (var lowMask = new Mat())
+            using (var highMask = new Mat())
+            {
+                Warp(lowHalf, lowFit.Calibration, k, size, lowTop, lowMask);
+                Warp(highHalf, highFit.Calibration, k, size, highTop, highMask);
+                // Ustten gorunumde Y yukari: Y = W/2 cizgisi satir ch/2. Ustteki satirlar (Y > W/2) 2. fotograftan.
+                int mid = ch / 2;
+                using (var pick = new Mat(size, MatType.CV_8UC1, Scalar.All(0)))
+                {
+                    Cv2.Rectangle(pick, new Rect(0, mid, cw, ch - mid), Scalar.All(255), -1);   // alt yari: 1. fotograf
+                    using (var useLow = new Mat())
+                    using (var useHigh = new Mat())
+                    using (var notPick = new Mat())
+                    using (var notHighMask = new Mat())
+                    using (var notLowMask = new Mat())
+                    using (var tmp = new Mat())
+                    {
+                        // Secilen fotograf o noktayi gormuyorsa digeri kullanilir
+                        Cv2.BitwiseNot(pick, notPick);
+                        Cv2.BitwiseNot(highMask, notHighMask);
+                        Cv2.BitwiseNot(lowMask, notLowMask);
+                        Cv2.BitwiseAnd(pick, lowMask, useLow);
+                        Cv2.BitwiseAnd(notPick, notHighMask, tmp);
+                        Cv2.BitwiseAnd(tmp, lowMask, tmp);
+                        Cv2.BitwiseOr(useLow, tmp, useLow);
+                        Cv2.BitwiseNot(useLow, useHigh);
+                        Cv2.BitwiseAnd(useHigh, highMask, useHigh);
+                        lowTop.CopyTo(canvas, useLow);
+                        highTop.CopyTo(canvas, useHigh);
+                    }
+                }
+            }
+
+            // Birlesik gorunumun kendi kalibrasyonu: piksel = mm x k (orijin sol altta, Y yukari)
+            Func<CameraPose, TableCalibration> canvasCal = cam =>
+            {
+                var c = new TableCalibration
+                {
+                    TableLengthMm = L, TableWidthMm = W, SlabThicknessMm = thicknessMm,
+                    ImageWidth = cw, ImageHeight = ch, ManualCamera = cam,
+                    CornerOrigin = new Point2(0, W * k), CornerYEnd = new Point2(0, 0),
+                    CornerFar = new Point2(L * k, 0), CornerXEnd = new Point2(L * k, W * k)
+                };
+                c.Build();
+                return c;
+            };
+            // Ustten gorunum zaten k olceginde: dedektor yeniden orneklemesin (secenek cagirana geri verilir)
+            double oldScale = options.PxPerMm;
+            options.PxPerMm = k;
+            try
+            {
+                output.Calibration = canvasCal(lowFit.Calibration.Camera);
+                using (var detector = new SlabDetector(output.Calibration, options))
+                {
+                    detector.SetTableColorAuto(canvas);
+                    output.Slabs = detector.Detect(canvas);
+                }
+                // Kalinlik duzeltmesi kameraya baglidir: Y = W/2'nin ustundeki parcalar 2. fotografin kamerasiyla
+                if (thicknessMm > 0 && highFit.Calibration.Camera != null)
+                {
+                    using (var detector = new SlabDetector(canvasCal(highFit.Calibration.Camera), options))
+                    {
+                        detector.SetTableColorAuto(canvas);
+                        List<SlabResult> high = detector.Detect(canvas);
+                        output.Slabs = output.Slabs.Where(s => s.Centroid.Y < W / 2).Concat(high.Where(s => s.Centroid.Y >= W / 2)).ToList();
+                    }
+                }
+            }
+            finally { options.PxPerMm = oldScale; }
+            RemoveTags(output.Slabs, layout);
+            output.Rectified = canvas;
+            output.Markers = lowFit.RmsMm >= highFit.RmsMm ? lowFit : highFit;   // kotu olani goster
+            return output;
+        }
+
+        private static MarkerFit SolveHalf(Mat image, MarkerLayout layout, int[] ids, int side)
+        {
+            List<KeyValuePair<Point2, Point2[]>> boards = CheckerFinder.FindAll(image, layout.PatternCols, layout.PatternRows);
+            return HalfViewSolver.Solve(layout, ids, boards.Select(b => b.Key).ToList(), boards.Select(b => b.Value).ToList(), image.Cols, image.Rows, side);
+        }
+
+        /// <summary>Fotografi ustten gorunume cevirir; mask fotografin gercekten gordugu yerlerdir.</summary>
+        private static void Warp(Mat image, TableCalibration cal, double k, Size size, Mat top, Mat mask)
+        {
+            Homography h = cal.ImageToRectified(k);
+            double[] a = h.ToArray();
+            using (var m = new Mat(3, 3, MatType.CV_64FC1))
+            using (var ones = new Mat(image.Size(), MatType.CV_8UC1, Scalar.All(255)))
+            {
+                for (int i = 0; i < 9; i++) m.Set<double>(i / 3, i % 3, a[i]);
+                Cv2.WarpPerspective(image, top, m, size, InterpolationFlags.Linear, BorderTypes.Constant, Scalar.All(0));
+                Cv2.WarpPerspective(ones, mask, m, size, InterpolationFlags.Nearest, BorderTypes.Constant, Scalar.All(0));
+            }
+            // Kenar pikselleri karisik: maskeyi biraz daralt
+            using (var kernel = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(5, 5)))
+                Cv2.Erode(mask, mask, kernel);
         }
 
         /// <summary>Koselerdeki dama etiketlerini bulur, merkezlerden kalibrasyonu hesaplar, tum ic koselerle inceltir.</summary>

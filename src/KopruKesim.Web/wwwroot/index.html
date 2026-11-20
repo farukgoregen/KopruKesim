@@ -67,6 +67,9 @@
   .grup .onay { margin: 8px 0 0; }
   .ana-dugmeler { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
   .ana-dugmeler #olcDugme { grid-column: 1 / -1; }
+  .iki-foto-satir { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; margin-top: 10px; }
+  .iki-foto-satir small { color: var(--soluk); }
+  .iki-foto-satir .satir { margin: 0; }
   .dugme.buyuk { padding: 13px 14px; font-size: 17px; }
   .canli-ayar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
   .canli-ayar .onay { margin: 4px 0; }
@@ -314,11 +317,52 @@
       <h2>Köşe etiketleri</h2>
       <p class="ipucu-kucuk">Dört köşeye birer dama etiketi koyun: etiketin iki kenarı tablanın köşesine dayalı, uzun kenarı tablanın uzun kenarı boyunca. Küçük etiket gri çizgisinden kesilir (170 × 140 mm); diğerleri A4 sayfanın tamamıdır.</p>
       <div class="modlar etiket-secim" role="radiogroup" aria-label="Etiket türü">
-        <label><input type="radio" name="dama" value="kucuk" checked><span>Küçük</span></label>
+        <label><input type="radio" name="dama" value="otomatik" checked><span>Otomatik</span></label>
+        <label><input type="radio" name="dama" value="kucuk"><span>Küçük</span></label>
         <label><input type="radio" name="dama" value="buyuk"><span>Büyük kareli</span></label>
         <label><input type="radio" name="dama" value="normal"><span>Normal</span></label>
       </div>
+      <label class="onay">
+        <input type="checkbox" id="ikiFotoSecim">
+        <span>İki fotoğraf (6 etiket)
+          <small>Kamera tablanın yarısını görüyorsa: dört köşeye ek olarak iki kısa kenarın tam ortasına birer etiket, 90° çevrik (uzun kenarı tablanın kısa kenarı boyunca). Sol ve sağ uzun kenardan birer fotoğraf çekilir, program ikisini milimetre ızgarasında birleştirir.</small>
+        </span>
+      </label>
       <p class="ipucu-kucuk">Yazdır (%100 gerçek boyut): <a href="/api/etiket/kucuk" target="_blank" rel="noopener">Küçük</a> · <a href="/api/etiket/buyuk" target="_blank" rel="noopener">Büyük kareli</a> · <a href="/api/etiket/normal" target="_blank" rel="noopener">Normal</a></p>
+    </div>
+
+    <div class="grup" id="ipKameraGrup">
+      <h2>IP kamera</h2>
+      <p class="ipucu-kucuk">Tablanın üstündeki sabit kamera (Dahua, RTSP). Şifre yalnız bu sunucu açıkken bellekte tutulur, hiçbir yere kaydedilmez; sunucu yeniden başlayınca tekrar girin.</p>
+      <div class="satir">
+        <label class="alan">IP adresi
+          <input id="kamAdres" type="text" placeholder="192.168.1.108" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="alan">Port
+          <input id="kamPort" type="number" min="1" max="65535" value="554" inputmode="numeric">
+        </label>
+      </div>
+      <div class="satir">
+        <label class="alan">Kullanıcı
+          <input id="kamKullanici" type="text" value="admin" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="alan">Şifre
+          <input id="kamSifre" type="password" autocomplete="new-password">
+        </label>
+      </div>
+      <div class="satir">
+        <label class="alan">Kanal
+          <input id="kamKanal" type="number" min="1" value="1" inputmode="numeric">
+        </label>
+        <label class="alan">Akış
+          <select id="kamAkis"><option value="0">Ana (tam çözünürlük)</option><option value="1">Alt (düşük)</option></select>
+        </label>
+      </div>
+      <div class="satir" style="margin-top: 8px">
+        <button type="button" class="dugme" id="kamBaglan">Bağlan</button>
+        <button type="button" class="dugme ikincil" id="kamKes" hidden>Bağlantıyı kes</button>
+      </div>
+      <p class="ipucu-kucuk" id="kamDurum">Bağlı değil.</p>
     </div>
 
     <div class="grup olcum-grup">
@@ -331,6 +375,25 @@
           <button type="button" data-k="0">0</button><button type="button" data-k="10">10</button><button type="button" data-k="20">20</button><button type="button" data-k="30">30</button>
         </div>
       </div>
+      <div id="ikiFotoBlok" hidden>
+        <div class="iki-foto-satir">
+          <div><b>1. fotoğraf</b> — sol uzun kenar (Y = 0)<br><small id="foto1Durum">çekilmedi</small></div>
+          <div class="satir">
+            <button type="button" class="dugme ikincil" data-iki="1" data-kaynak="dosya">Yükle</button>
+            <button type="button" class="dugme ikincil iki-kam" data-iki="1" data-kaynak="kamera" hidden>IP kameradan çek</button>
+          </div>
+        </div>
+        <div class="iki-foto-satir">
+          <div><b>2. fotoğraf</b> — sağ uzun kenar (Y = genişlik)<br><small id="foto2Durum">çekilmedi</small></div>
+          <div class="satir">
+            <button type="button" class="dugme ikincil" data-iki="2" data-kaynak="dosya">Yükle</button>
+            <button type="button" class="dugme ikincil iki-kam" data-iki="2" data-kaynak="kamera" hidden>IP kameradan çek</button>
+          </div>
+        </div>
+        <button class="dugme buyuk" id="ikiOlcDugme" disabled style="width: 100%; margin-top: 10px">Birleştir ve ölç</button>
+      </div>
+      <div id="tekFotoBlok">
+      <button class="dugme buyuk" id="kamOlc" hidden style="width: 100%; margin-top: 10px">IP kameradan fotoğraf çek ve ölç</button>
       <div class="ana-dugmeler">
         <button class="dugme buyuk" data-sec="olc" id="olcDugme">Fotoğraf yükle</button>
         <button class="dugme buyuk ikincil" data-sec="cek" id="cekDugme">Fotoğraf çek</button>
@@ -338,7 +401,8 @@
       </div>
       <div class="canli-ayar">
         <button class="dugme ikincil" id="kareDugme" hidden>Bu kareyi ölç</button>
-        <label class="onay"><input type="checkbox" id="surekli" checked><span>Canlıda sürekli ölç</span></label>
+        <label class="onay"><input type="checkbox" id="surekli"><span>Canlıda sürekli ölç</span></label>
+      </div>
       </div>
     </div>
 
@@ -373,6 +437,7 @@
 </div>
 
 <input type="file" id="dosya" accept="image/*" hidden>
+<input type="file" id="ikiDosya" accept="image/*" hidden>
 <input type="file" id="cekDosya" accept="image/*" capture="environment" hidden>
 
 <script>
@@ -441,15 +506,18 @@
   function yontem() { const r = document.querySelector('input[name="yontem"]:checked'); return r ? r.value : "dama"; }
 
   function durumYaz() {
-    const tur = { kucuk: "küçük", buyuk: "büyük kareli", normal: "normal" }[document.querySelector('input[name="dama"]:checked').value];
+    const tur = { otomatik: "otomatik türde", kucuk: "küçük", buyuk: "büyük kareli", normal: "normal" }[document.querySelector('input[name="dama"]:checked').value];
     const damasiz = yontem() === "damasiz";
     $("etiketGrup").hidden = damasiz;
+    const iki = ikiFotoModu();
+    $("ikiFotoBlok").hidden = !iki;
+    $("tekFotoBlok").hidden = iki;
     $("profilGrup").hidden = !damasiz;
     olcuKilidi();
     $("yontemIpucu").textContent = damasiz
       ? "Etiket gerekmez: tablanın dört kenarı fotoğrafta bulunur ve köşeler kenarların kesişiminden hesaplanır. Tablanın tamamı görünmeli ve zeminden ayırt edilebilmeli; köşe etiketli yönteme göre daha az kesin."
       : "Tablanın dört köşesindeki dama etiketlerinden köşeler bulunur. En kesin yöntem.";
-    $("durum").innerHTML = `Tabla <b>${sayi(+$("uzunluk").value || 0)} × ${sayi(+$("genislik").value || 0)} mm</b>, ` + (damasiz ? "damasız (köşeler tabla kenarlarından)" : `${tur} köşe etiketi`);
+    $("durum").innerHTML = `Tabla <b>${sayi(+$("uzunluk").value || 0)} × ${sayi(+$("genislik").value || 0)} mm</b>, ` + (damasiz ? "damasız (köşeler tabla kenarlarından)" : iki ? `${tur} 6 etiket, iki fotoğraf` : `${tur} köşe etiketi`);
     $("sekmeOlcum").disabled = !sonOlcum;
     $("sekmeKamera").setAttribute("aria-selected", gorunum === "kamera");
     $("sekmeOlcum").setAttribute("aria-selected", gorunum === "olcum");
@@ -795,9 +863,19 @@
   function sonucYaz() {
     const kutu = $("sonuc"); kutu.replaceChildren();
     if (!sonOlcum) return;
-    if (sonOlcum.isaretler) {
+    if (sonOlcum.ikiFoto) {
+      const yaz = (ad, h) => !h ? "" : !h.basarili ? `${ad}: kalibre edilemedi. ` :
+        `${ad}: ${h.kullanilan.length} etiket, ızgara hatası ortalama ${sayi(h.ortalamaMm, 2)} mm (en kötü ${sayi(h.enKotuMm, 2)} mm)` +
+        (h.kamera ? `, kamera X ${sayi(h.kamera.x)} Y ${sayi(h.kamera.y)} yükseklik ${sayi(h.kamera.z)} mm` : "") + ". ";
+      const p = document.createElement("p"); p.className = "isaret-bilgi parca";
+      p.textContent = "İki fotoğraf birleştirildi (dikiş tablanın ortasında, Y = genişlik / 2). " + yaz("1. fotoğraf (sol)", sonOlcum.ikiFoto.foto1) + yaz("2. fotoğraf (sağ)", sonOlcum.ikiFoto.foto2);
+      kutu.append(p);
+    }
+    if (sonOlcum.isaretler && !sonOlcum.ikiFoto) {
       const s = sonOlcum.isaretler, p = document.createElement("p"); p.className = "isaret-bilgi parca";
+      const turAdi = { kucuk: "küçük", buyuk: "büyük kareli", normal: "normal" }[sonOlcum.etiketTuru];
       p.textContent = `Kalibrasyon bu fotoğraftaki ${s.kullanilan.length} işaretten hesaplandı (uyum ortalama ${sayi(s.ortalamaMm, 1)} mm, en kötü ${sayi(s.enKotuMm, 1)} mm).` +
+        (turAdi ? ` Etiket türü: ${turAdi}.` : "") +
         (s.gorunmeyen.length ? ` Görünmeyen: ${s.gorunmeyen.join(", ")}.` : "") +
         (s.atilan.length ? ` Diğerleriyle uyuşmadığı için kullanılmayan: ${s.atilan.join(", ")}; yerinden oynamış olabilir.` : "");
       kutu.append(p);
@@ -868,7 +946,7 @@
   $("dosya").onchange = e => { const f = e.target.files[0]; if (f) olc(f); };
   const kalinlikDegisti = () => {
     document.querySelectorAll(".hizli button").forEach(b => b.setAttribute("aria-pressed", b.dataset.k === String(parseFloat($("kalinlik").value))));
-    clearTimeout(kalinlikDegisti.t); kalinlikDegisti.t = setTimeout(() => sonFoto && olc(sonFoto, false), 400);
+    clearTimeout(kalinlikDegisti.t); kalinlikDegisti.t = setTimeout(() => { if (ikiFotoModu() && ikiSon) ikiOlc(false); else if (sonFoto) olc(sonFoto, false); }, 400);
   };
   $("kalinlik").oninput = kalinlikDegisti;
   document.querySelectorAll(".hizli button").forEach(b => b.onclick = () => { $("kalinlik").value = b.dataset.k; kalinlikDegisti(); });
@@ -1034,6 +1112,100 @@
   try { const d = localStorage.getItem("kopruKesimDama"); if (d) document.querySelectorAll('input[name="dama"]').forEach(r => r.checked = r.value === d); } catch (e) { }
   document.querySelectorAll('input[name="yontem"]').forEach(r => r.onchange = () => { try { localStorage.setItem("kopruKesimYontem", r.value); } catch (e) { } ciz(); });
   try { const y = localStorage.getItem("kopruKesimYontem"); if (y) document.querySelectorAll('input[name="yontem"]').forEach(r => r.checked = r.value === y); } catch (e) { }
+
+  // ---------- IP kamera ----------
+  // Adres, port, kullanici, kanal ve akis tarayicida hatirlanir; sifre hatirlanmaz (yalniz sunucu belleginde).
+  const kamAlanlar = ["kamAdres", "kamPort", "kamKullanici", "kamKanal", "kamAkis"];
+  try { const k = JSON.parse(localStorage.getItem("kopruKesimKamera") || "{}"); kamAlanlar.forEach(id => { if (k[id] != null) $(id).value = k[id]; }); } catch (e) { }
+  function kamDurumYaz(d) {
+    const bagli = d && d.bagli;
+    $("kamKes").hidden = !(d && d.ayarli);
+    $("kamOlc").hidden = !bagli;
+    document.querySelectorAll(".iki-kam").forEach(b => b.hidden = !bagli);
+    $("kamDurum").textContent = !d || !d.ayarli ? "Bağlı değil."
+      : bagli ? `Bağlı: ${d.adres} — ${d.genislik} × ${d.yukseklik} piksel${d.fps ? ", " + sayi(d.fps, 0) + " kare/sn" : ""}.`
+      : `${d.adres}: ${d.durum}`;
+    // Baglanti kurulana (ya da hata cikana) kadar durumu yenile
+    clearTimeout(kamDurumYaz.t);
+    if (d && d.ayarli && !bagli) kamDurumYaz.t = setTimeout(kamDurumAl, 2000);
+  }
+  async function kamDurumAl() { try { kamDurumYaz(await istek("/api/kamera")); } catch (e) { } }
+  $("kamBaglan").onclick = async () => {
+    try { const k = {}; kamAlanlar.forEach(id => k[id] = $(id).value); localStorage.setItem("kopruKesimKamera", JSON.stringify(k)); } catch (e) { }
+    const f = new FormData();
+    f.append("adres", $("kamAdres").value.trim()); f.append("port", $("kamPort").value);
+    f.append("kullanici", $("kamKullanici").value); f.append("sifre", $("kamSifre").value);
+    f.append("kanal", $("kamKanal").value); f.append("akis", $("kamAkis").value);
+    $("kamBaglan").disabled = true; $("kamDurum").textContent = "Bağlanıyor…"; hata("");
+    try { kamDurumYaz(await istek("/api/kamera", f)); }
+    catch (e) { hata(e.message); kamDurumYaz(null); }
+    finally { $("kamBaglan").disabled = false; }
+  };
+  $("kamKes").onclick = async () => { try { kamDurumYaz(await istek("/api/kamera/kapat", new FormData())); } catch (e) { hata(e.message); } };
+  // Olcum yalniz dugmeye basilinca: o anda kameradan taze bir fotograf alinir ve yuklenen fotograf gibi
+  // olculur (cizim, kayit, tum yollar ayni). Kamera bagliyken kendiliginden ya da surekli olcum yapilmaz.
+  // ---------- Iki fotografli olcum (6 etiket) ----------
+  // 1. fotograf sol uzun kenardan (tablanin Y = 0 yarisi), 2. fotograf sag uzun kenardan (Y = genislik yarisi).
+  // Olcum yalniz "Birlestir ve olc" ile baslar; fotograf cekmek tek basina olcmez.
+  function ikiFotoModu() { return yontem() === "dama" && $("ikiFotoSecim").checked; }
+  const ikiFoto = [null, null];
+  let ikiSon = null;          // son olculen fotograf cifti (kalinlik degisince yeniden olcmek icin)
+  let ikiHedef = 1;
+  function ikiDurumYaz() {
+    [1, 2].forEach(n => { const f = ikiFoto[n - 1]; $("foto" + n + "Durum").textContent = f ? `hazır (${f.name}, ${sayi(f.size / 1024)} KB)` : "çekilmedi"; });
+    $("ikiOlcDugme").disabled = !(ikiFoto[0] && ikiFoto[1]);
+  }
+  function ikiFotoKoy(n, dosya) { ikiFoto[n - 1] = dosya; ikiDurumYaz(); }
+  document.querySelectorAll("[data-iki]").forEach(b => b.onclick = async () => {
+    const n = +b.dataset.iki;
+    if (b.dataset.kaynak === "dosya") { ikiHedef = n; $("ikiDosya").value = ""; $("ikiDosya").click(); return; }
+    b.disabled = true; hata("");
+    try {
+      const r = await fetch("/api/kamera/kare");
+      if (!r.ok) { let m = "Kameradan kare alınamadı."; try { m = (await r.json()).hata || m; } catch (e) { } hata(m); kamDurumAl(); return; }
+      ikiFotoKoy(n, new File([await r.blob()], `ipkamera_${n}.jpg`, { type: "image/jpeg" }));
+    } finally { b.disabled = false; }
+  });
+  $("ikiDosya").onchange = e => { const f = e.target.files[0]; if (f) ikiFotoKoy(ikiHedef, f); };
+  async function ikiOlc(gecis = true) {
+    const [f1, f2] = ikiSon && !gecis ? ikiSon : ikiFoto;
+    if (!f1 || !f2) return;
+    hata("");
+    const form = olcumFormu(f1);
+    form.append("dosya2", f2);
+    $("sahne").classList.add("calisiyor");
+    const b = $("ikiOlcDugme"), yazi = b.textContent;
+    b.disabled = true; b.textContent = "Ölçülüyor…";
+    try {
+      sonOlcum = await istek("/api/olc", form);
+      ikiSon = [f1, f2];
+      // Fotograf sekmesinde birlesik ustten gorunum gosterilir (iki fotografin birlesimi)
+      sonFoto = new File([await (await fetch(sonOlcum.goruntu)).blob()], "birlesik.jpg", { type: "image/jpeg" });
+      if (gecis) gorunum = "olcum";
+      ciz(); sonucYaz();
+      if (window.matchMedia("(max-width: 900px)").matches) $("sahne").scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (e) { hata(e.message); }
+    finally { $("sahne").classList.remove("calisiyor"); b.textContent = yazi; ikiDurumYaz(); }
+  }
+  $("ikiOlcDugme").onclick = () => ikiOlc(true);
+  $("ikiFotoSecim").onchange = () => { try { localStorage.setItem("kopruKesimIkiFoto", $("ikiFotoSecim").checked ? "1" : "0"); } catch (e) { } ciz(); };
+  try { $("ikiFotoSecim").checked = localStorage.getItem("kopruKesimIkiFoto") === "1"; } catch (e) { }
+  ikiDurumYaz(); ciz();
+
+  $("kamOlc").onclick = async () => {
+    const b = $("kamOlc");
+    if (b.disabled) return;
+    b.disabled = true; hata("");
+    const yazi = b.textContent; b.textContent = "Fotoğraf çekiliyor…";
+    try {
+      const r = await fetch("/api/kamera/kare");
+      if (!r.ok) { let m = "Kameradan kare alınamadı."; try { m = (await r.json()).hata || m; } catch (e) { } hata(m); kamDurumAl(); return; }
+      const dosya = new File([await r.blob()], "ipkamera.jpg", { type: "image/jpeg" });
+      b.textContent = "Ölçülüyor…";
+      await olc(dosya);
+    } finally { b.disabled = false; b.textContent = yazi; }
+  };
+  kamDurumAl();
   try {
     const a = JSON.parse(localStorage.getItem("kopruKesimAyar") || "{}");
     AYAR.forEach(id => { if (a[id] === undefined) return; const e = $(id); if (e.type === "checkbox") e.checked = a[id]; else e.value = a[id]; });

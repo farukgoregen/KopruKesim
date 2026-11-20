@@ -42,6 +42,24 @@ namespace KopruKesim.Core
         /// merkezin koseye uzakligini da kucultur; tam sayfada desen sayfanin ortasinda kalir.
         /// </summary>
         public bool CutTag = false;
+        /// <summary>
+        /// Deseni 90 derece cevrik konan etiketler (ic kose sutunlari tablanin Y yonunde). Kisa kenarin ortasindaki
+        /// etiketler boyle konur; koseler ve ortalar boylece birbirinden ayrilir (iki fotografli olcum).
+        /// </summary>
+        public HashSet<int> Rotated = new HashSet<int>();
+        /// <summary>True ise her etiketin yonu zorunludur (Rotated'a gore); false ise iki yon de kabul edilir.</summary>
+        public bool StrictOrientation = false;
+
+        /// <summary>
+        /// Etiketin dayandigi tabla noktasi: kosedeki etiket icin kose, kenarin ortasindaki etiket icin kenar
+        /// uzerindeki nokta. Bir eksende tabla kenarina ortadan yakinsa o kenar, degilse etiketin kendi koordinati.
+        /// </summary>
+        public Point2 AnchorOf(double x, double y)
+        {
+            double ax = Math.Min(x, TableLengthMm - x) < Math.Abs(x - TableLengthMm / 2) ? (x < TableLengthMm / 2 ? 0 : TableLengthMm) : x;
+            double ay = Math.Min(y, TableWidthMm - y) < Math.Abs(y - TableWidthMm / 2) ? (y < TableWidthMm / 2 ? 0 : TableWidthMm) : y;
+            return new Point2(ax, ay);
+        }
     }
 
     /// <summary>Isaretlerden hesaplanan kalibrasyonun sonucu.</summary>
