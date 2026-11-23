@@ -48,6 +48,34 @@ namespace KopruKesim.Vision
         /// <summary>Uyan noktalarin en buyuk sapmasi bunun ustundeyse kenar duz sayilmaz (lens bukulmesi, yanlis nokta).</summary>
         public const double StraightPx = 2.5;
 
+        /// <summary>
+        /// Gri goruntunun Sobel gradyani (x ve y). Yinelemeli oturtmada her tur icin ayri ayri hesaplanmasin
+        /// diye bir kez uretilip Fit'e verilir (4K karede tur basina yuzlerce ms ve buyuk bellek kopyasi kazandirir).
+        /// </summary>
+        public sealed class GradientField
+        {
+            public float[] Gx, Gy;
+            public int W, H;
+        }
+
+        /// <summary>Karenin gradyan alanini bir kez hesaplar (gri + 3x3 bulanik + Sobel).</summary>
+        public static GradientField Gradients(Mat frame)
+        {
+            using (var gray = new Mat())
+            using (var gxm = new Mat())
+            using (var gym = new Mat())
+            {
+                if (frame.Channels() == 1) frame.CopyTo(gray); else Cv2.CvtColor(frame, gray, ColorConversionCodes.BGR2GRAY);
+                Cv2.GaussianBlur(gray, gray, new Size(3, 3), 0);
+                Cv2.Sobel(gray, gxm, MatType.CV_32F, 1, 0);
+                Cv2.Sobel(gray, gym, MatType.CV_32F, 0, 1);
+                var g = new GradientField { W = frame.Cols, H = frame.Rows };
+                gxm.GetArray(out g.Gx);
+                gym.GetArray(out g.Gy);
+                return g;
+            }
+        }
+
         /// <summary>Dortgenin her kenarina esit aralikla perEdge nokta (koselerin hemen yanina konmaz).</summary>
         public static List<Point2>[] Sample(Point2[] corners, int perEdge)
         {
@@ -66,7 +94,10 @@ namespace KopruKesim.Vision
         }
 
         /// <param name="snapPx">Noktanin kenara dik yonde aranacagi yaricap (piksel); 0 ise oturtma yapilmaz.</param>
-        public static EdgeFitResult Fit(Mat frame, IList<List<Point2>> edgePoints, double snapPx)
+        /// <param name="outermost">Kenar basina: en guclu yerine en distaki guclu gecis (en gucluun yarisindan buyuk) alinsin.
+        /// Dis yon dort kenarin noktalarinin ortasindan uzaklasan yondur. null: hepsi en guclu.</param>
+        /// <param name="precomputed">Onceden hesaplanmis gradyan; null ise (snapPx > 0 oldugunda) bu cagrida hesaplanir.</param>
+        public static EdgeFitResult Fit(Mat frame, IList<List<Point2>> edgePoints, double snapPx, bool[] outermost = null, GradientField precomputed = null)
         {
             var result = new EdgeFitResult();
             if (edgePoints == null || edgePoints.Count != 4 || edgePoints.Any(l => l == null || l.Count < 2))
@@ -78,17 +109,8 @@ namespace KopruKesim.Vision
             float[] gx = null, gy = null;
             if (snapPx > 0)
             {
-                using (var gray = new Mat())
-                using (var gxm = new Mat())
-                using (var gym = new Mat())
-                {
-                    if (frame.Channels() == 1) frame.CopyTo(gray); else Cv2.CvtColor(frame, gray, ColorConversionCodes.BGR2GRAY);
-                    Cv2.GaussianBlur(gray, gray, new Size(3, 3), 0);
-                    Cv2.Sobel(gray, gxm, MatType.CV_32F, 1, 0);
-                    Cv2.Sobel(gray, gym, MatType.CV_32F, 0, 1);
-                    gxm.GetArray(out gx);
-                    gym.GetArray(out gy);
-                }
+                GradientField g = precomputed ?? Gradients(frame);
+                gx = g.Gx; gy = g.Gy; w = g.W; h = g.H;
             }
             result.Edges = new FittedEdge[4];
             for (int e = 0; e < 4; e++)
@@ -98,6 +120,15 @@ namespace KopruKesim.Vision
                 double a0, b0, c0;
                 FitLine(pts, Enumerable.Repeat(true, pts.Count).ToArray(), out a0, out b0, out c0);
                 var n = new Point2(a0, b0);
+                bool outer = outermost != null && outermost.Length > e && outermost[e];
+                if (outer)
+                {
+                    // Normal disari baksin: dort kenarin noktalarinin ortasindan bu kenarin ortasina dogru
+                    var all = edgePoints.SelectMany(l => l).ToList();
+                    var center = new Point2(all.Average(q => q.X), all.Average(q => q.Y));
+                    var mid = new Point2(pts.Average(q => q.X), pts.Average(q => q.Y));
+                    if (Point2.Dot(n, mid - center) < 0) n = new Point2(-n.X, -n.Y);
+                }
                 var fe = new FittedEdge { Points = new Point2[pts.Count], Snapped = new bool[pts.Count] };
                 for (int i = 0; i < pts.Count; i++)
                 {
@@ -105,7 +136,7 @@ namespace KopruKesim.Vision
                     if (snapPx > 0)
                     {
                         Point2 s;
-                        if (SnapToEdge(gx, gy, w, h, pts[i], n, snapPx, out s)) { fe.Points[i] = s; fe.Snapped[i] = true; }
+                        if (SnapToEdge(gx, gy, w, h, pts[i], n, snapPx, outer, out s)) { fe.Points[i] = s; fe.Snapped[i] = true; }
                     }
                 }
                 FitRobust(fe);
@@ -124,8 +155,11 @@ namespace KopruKesim.Vision
             return result;
         }
 
-        /// <summary>Normal yonunde +-r aralikta en guclu gecisi bulur; parabolle piksel alti. Gecis zayifsa false.</summary>
-        private static bool SnapToEdge(float[] gx, float[] gy, int w, int h, Point2 p, Point2 n, double r, out Point2 snapped)
+        /// <summary>
+        /// Normal yonunde +-r aralikta en guclu gecisi bulur; parabolle piksel alti. Gecis zayifsa false. outermost: n
+        /// disari bakar; en gucluun yarisindan buyuk yerel tepelerden en distaki alinir.
+        /// </summary>
+        private static bool SnapToEdge(float[] gx, float[] gy, int w, int h, Point2 p, Point2 n, double r, bool outermost, out Point2 snapped)
         {
             snapped = p;
             const double step = 0.5;
@@ -142,6 +176,12 @@ namespace KopruKesim.Vision
             }
             // Zayif gecis (duz yuzey): oturtma guvenilmez, nokta yerinde kalir
             if (best < 30) return false;
+            if (outermost)
+                for (int k = count - 1; k > -count; k--)
+                {
+                    double v = vals[k + count];
+                    if (v >= 0.5 * best && v >= vals[k + count - 1] && (k == count || v >= vals[k + count + 1])) { bestK = k; break; }
+                }
             double off = bestK * step;
             int idx = bestK + count;
             if (idx > 0 && idx < vals.Length - 1)
@@ -163,11 +203,16 @@ namespace KopruKesim.Vision
             return g[i] * (1 - fx) * (1 - fy) + g[i + 1] * fx * (1 - fy) + g[i + w] * (1 - fx) * fy + g[i + w + 1] * fx * fy;
         }
 
-        /// <summary>Toplam en kucuk kareler dogrusu; aykiri nokta tek tek cikarilir (en az iki nokta kalir).</summary>
+        /// <summary>
+        /// Toplam en kucuk kareler dogrusu; aykiri nokta tek tek cikarilir (en az iki nokta kalir). En az uc nokta bir
+        /// gecise oturtulabildiyse oturtulamayanlar baslangicta disarida birakilir: onlar kaba konumda durur ve kaba
+        /// cizgi egikse dogruyu ona geri ceker (2026-11-21: ust kenarin bir ucu maskeden 20 mm kayikti).
+        /// </summary>
         private static void FitRobust(FittedEdge fe)
         {
             int n = fe.Points.Length;
-            fe.Inlier = Enumerable.Repeat(true, n).ToArray();
+            bool snappedEnough = fe.Snapped != null && fe.Snapped.Count(b => b) >= 3;
+            fe.Inlier = Enumerable.Range(0, n).Select(i => !snappedEnough || fe.Snapped[i]).ToArray();
             fe.Residuals = new double[n];
             while (true)
             {

@@ -1,71 +1,86 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
+using System.IO.Compression;
 using KopruKesim.Core;
 using KopruKesim.Vision;
 using OpenCvSharp;
 
 // Yerel deneme arayuzu. Calistirma: dotnet run --project src/KopruKesim.Web
-// Olcum kayitlari ve kayitli tablalar "veri" klasorunde tutulur.
+// Kalibrasyonlar ve olcum kayitlari D:\SMO\photos altinda tutulur (D diski).
 // Ag modu (--ag): ayni Wi-Fi'deki telefon/tablet https ile baglanir (tarayici kameraya ancak https ile izin verir).
 bool networkMode = args.Contains("--ag");
-var builder = WebApplication.CreateBuilder(args.Where(a => a != "--ag").ToArray());
+bool openBrowser = args.Contains("--tarayici");
+var builder = WebApplication.CreateBuilder(args.Where(a => a != "--ag" && a != "--tarayici").ToArray());
+
+static int ReadPort(string value, string name)
+{
+    if (int.TryParse(value, out int port) && port is >= 1 and <= 65535) return port;
+    throw new ArgumentException($"{name} 1 ile 65535 arasında bir sayı olmalı.");
+}
+
+int? panelPort = null;
+int lanPort = 5443;
+try
+{
+    if (builder.Configuration["panel-port"] is string panelValue) panelPort = ReadPort(panelValue, "Yerel port");
+    if (networkMode && builder.Configuration["lan-port"] is string lanValue) lanPort = ReadPort(lanValue, "Ağ portu");
+    if (networkMode && panelPort == lanPort) throw new ArgumentException("Yerel port ile ağ portu farklı olmalı.");
+}
+catch (ArgumentException error)
+{
+    Console.Error.WriteLine(error.Message);
+    Environment.ExitCode = 2;
+    return;
+}
+
+if (panelPort is int port)
+    builder.WebHost.ConfigureKestrel(options => options.ListenLocalhost(port));
+
 string[] lanUrls = Array.Empty<string>();
 if (networkMode)
 {
+    // Sertifika fotograflarin arasina karismasin: calisma klasorundeki veri altinda kalir
     string certDir = Path.Combine(builder.Environment.ContentRootPath, "veri");
     Directory.CreateDirectory(certDir);
     var (cert, ips) = LanCertificate.LoadOrCreate(certDir);
-    builder.WebHost.ConfigureKestrel(o =>
-    {
-        // Yalnizca https: normal moddaki sunucu (5080) ayni anda acik olsa da cakismaz
-        o.ListenAnyIP(5443, l => l.UseHttps(cert));
-    });
-    lanUrls = ips.Select(ip => $"https://{ip}:5443").ToArray();
+    builder.WebHost.ConfigureKestrel(options => options.ListenAnyIP(lanPort, listener => listener.UseHttps(cert)));
+    lanUrls = ips.Select(ip => $"https://{ip}:{lanPort}").ToArray();
 }
+
 var app = builder.Build();
-if (networkMode)
+if (panelPort.HasValue || networkMode)
     app.Lifetime.ApplicationStarted.Register(() =>
     {
-        Console.WriteLine();
-        Console.WriteLine("=== AG MODU ===");
-        Console.WriteLine("Bu bilgisayarda:  https://localhost:5443");
-        foreach (string u in lanUrls) Console.WriteLine("Telefon/tablet:   " + u);
-        Console.WriteLine("Telefon ayni Wi-Fi'de olmali. Ilk acilista 'baglanti guvenli degil' uyarisi cikar:");
-        Console.WriteLine("sertifika bu bilgisayarda uretildigi icindir; 'Gelismis > Devam et' ile gecin.");
-        Console.WriteLine("Windows guvenlik duvari izin sorarsa yalnizca 'Ozel agler' icin izin verin.");
-        Console.WriteLine();
+        string panelUrl = panelPort is int localPort ? $"http://localhost:{localPort}" : $"https://localhost:{lanPort}";
+        Console.WriteLine($"Bu bilgisayarda: {panelUrl}");
+        if (networkMode)
+        {
+            foreach (string url in lanUrls) Console.WriteLine($"Telefon/tablet: {url}");
+            if (lanUrls.Length == 0) Console.WriteLine("Ağ adresi bulunamadı. Wi-Fi veya Ethernet bağlantısını kontrol edin.");
+            else Console.WriteLine("Telefon aynı yerel ağda olmalı. Ağ HTTPS sertifikası yerel olarak imzalanır.");
+        }
+        if (!openBrowser) return;
+        try
+        {
+            using var browser = Process.Start(new ProcessStartInfo(panelUrl) { UseShellExecute = true });
+        }
+        catch (Exception error) when (error is Win32Exception or InvalidOperationException)
+        {
+            Console.Error.WriteLine($"Tarayıcı açılamadı. Adresi kendiniz açabilirsiniz: {panelUrl}");
+        }
     });
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
 var inv = CultureInfo.InvariantCulture;
 var gate = new object();
-string dataDir = Path.Combine(app.Environment.ContentRootPath, "veri");
+string dataDir = @"D:\SMO\photos";
 Directory.CreateDirectory(dataDir);
-// Yazdirilacak etiket PDF'leri depo kokundeki "ornek/dama" klasorunden gelir
-string repoRoot = app.Environment.ContentRootPath;
-while (repoRoot != null && !File.Exists(Path.Combine(repoRoot, "KopruKesim.sln"))) repoRoot = Path.GetDirectoryName(repoRoot);
 
 IResult Fail(string message) => Results.Json(new { hata = message }, statusCode: 400);
 
 static double[] P(Point2 p) => new[] { Math.Round(p.X, 1), Math.Round(p.Y, 1) };
-
-Point2[] ParseCorners(string text)
-{
-    if (string.IsNullOrWhiteSpace(text)) return null;
-    string[] parts = text.Split(';');
-    if (parts.Length != 4) return null;
-    var c = new Point2[4];
-    for (int i = 0; i < 4; i++)
-    {
-        string[] xy = parts[i].Split(',');
-        if (xy.Length != 2) throw new FormatException("Kose 'x,y' biciminde olmali: " + parts[i]);
-        c[i] = new Point2(double.Parse(xy[0], inv), double.Parse(xy[1], inv));
-    }
-    return c;
-}
-
-// Kenar noktasinin kenara dik yonde aranacagi yaricap: elle yakinlastirarak konan nokta birkac piksel icinde olur
-static double EdgeSnapPx(Mat frame) => Math.Max(5.0, Math.Max(frame.Cols, frame.Rows) / 400.0);
 
 async Task<byte[]> ReadFile(IFormCollection form)
 {
@@ -76,85 +91,25 @@ async Task<byte[]> ReadFile(IFormCollection form)
     return ms.ToArray();
 }
 
-// ---------- Tabla profilleri ----------
-// Her tabla icin bir kez: referans fotograf + onayli dort kose + tabla olcusu (veri/tablalar/<id>/).
-// Olcumde profil secilirse koseler bu fotografa tabla yuzeyi deseni eslestirilerek tasinir.
-string profilesDir = Path.Combine(dataDir, "tablalar");
-Directory.CreateDirectory(profilesDir);
-bool ValidProfileId(string id) => !string.IsNullOrEmpty(id) && id.All(ch => char.IsLetterOrDigit(ch) || ch == '_' || ch == '-');
-string ProfileFolder(string id) => Path.Combine(profilesDir, id);
-
-object ProfileList() => Directory.GetDirectories(profilesDir)
-    .Select(d => new { id = Path.GetFileName(d), file = Path.Combine(d, "profil.txt") })
-    .Where(x => File.Exists(x.file))
-    .Select(x =>
-    {
-        try { TableProfile p = TableProfile.Load(x.file); return new { id = x.id, ad = p.Name, uzunluk = p.TableLengthMm, genislik = p.TableWidthMm }; }
-        catch (Exception) { return null; }
-    })
-    .Where(x => x != null)
-    .OrderBy(x => x.ad)
-    .ToList();
-
-app.MapGet("/api/tablalar", () => { lock (gate) return Results.Json(ProfileList()); });
-
-app.MapGet("/api/tablalar/{id}/foto", (string id) =>
+IResult SaveCalibrationArchive(string folder, string modelPath, string photoPath, params string[] optionalFiles)
 {
-    if (!ValidProfileId(id)) return Results.NotFound();
-    string path = Path.Combine(ProfileFolder(id), "referans.jpg");
-    return File.Exists(path) ? Results.File(path, "image/jpeg") : Results.NotFound();
-});
-
-// Kaydet: fotograf + koseler (+ ad, olcu). Koseler kenarlara piksel alti oturtulur.
-app.MapPost("/api/tablalar", async (HttpRequest req) =>
-{
-    IFormCollection form = await req.ReadFormAsync();
-    byte[] bytes = await ReadFile(form);
-    if (bytes == null) return Fail("Fotoğraf gelmedi.");
-    string name = form["ad"].ToString().Trim();
-    if (name.Length == 0) return Fail("Tablaya bir ad verin.");
-    double length = double.TryParse(form["uzunluk"], NumberStyles.Float, inv, out double l) ? l : 0;
-    double width = double.TryParse(form["genislik"], NumberStyles.Float, inv, out double w) ? w : 0;
-    if (length <= 0 || width <= 0) return Fail("Tablanın uzunluğunu ve genişliğini girin.");
-    Point2[] corners;
-    try { corners = ParseCorners(form["koseler"]); } catch (FormatException) { corners = null; }
-    if (corners == null) return Fail("Dört köşe gelmedi.");
     lock (gate)
     {
-        using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
-        if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
-        if (form["incelt"] == "1") corners = TableMeasure.SnapCorners(frame, corners, Math.Max(3.0, Math.Max(frame.Cols, frame.Rows) / 1000.0));
-        try
+        if (!File.Exists(modelPath) || !File.Exists(photoPath))
+            return Fail("Kaydedilecek kalibrasyon ve fotoğraf bulunamadı.");
+
+        using var output = new MemoryStream();
+        using (var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
         {
-            var test = new TableCalibration { TableLengthMm = length, TableWidthMm = width, ImageWidth = frame.Cols, ImageHeight = frame.Rows,
-                CornerOrigin = corners[0], CornerYEnd = corners[1], CornerFar = corners[2], CornerXEnd = corners[3] };
-            test.Build();
+            foreach (string file in new[] { modelPath, photoPath }.Concat(optionalFiles))
+            {
+                if (File.Exists(file))
+                    archive.CreateEntryFromFile(file, $"veri/{folder}/{Path.GetFileName(file)}", CompressionLevel.Fastest);
+            }
         }
-        catch (Exception) { return Fail("Bu köşelerle geçerli bir tabla oluşmuyor. Köşeleri sırasıyla yerleştirin."); }
-        string slug = new string(name.ToLowerInvariant().Select(ch => char.IsLetterOrDigit(ch) && ch < 128 ? ch : '_').ToArray()).Trim('_');
-        if (slug.Length > 30) slug = slug.Substring(0, 30);
-        string id = (slug.Length > 0 ? slug + "_" : "") + DateTime.Now.ToString("yyyyMMddHHmmss");
-        string folder = ProfileFolder(id);
-        Directory.CreateDirectory(folder);
-        Cv2.ImWrite(Path.Combine(folder, "referans.jpg"), frame, new ImageEncodingParam(ImwriteFlags.JpegQuality, 95));
-        new TableProfile { Name = name, TableLengthMm = length, TableWidthMm = width, ImageWidth = frame.Cols, ImageHeight = frame.Rows, Corners = corners }
-            .Save(Path.Combine(folder, "profil.txt"));
-        return Results.Json(new { id, koseler = corners.Select(P), tablalar = ProfileList() });
+        return Results.File(output.ToArray(), "application/zip", $"{folder}-{DateTime.Now:yyyyMMdd-HHmmss}.zip");
     }
-});
-
-app.MapPost("/api/tablalar/sil", async (HttpRequest req) =>
-{
-    IFormCollection form = await req.ReadFormAsync();
-    string id = form["id"].ToString();
-    if (!ValidProfileId(id)) return Fail("Geçersiz tabla.");
-    lock (gate)
-    {
-        string folder = ProfileFolder(id);
-        if (Directory.Exists(folder)) Directory.Delete(folder, true);
-        return Results.Json(ProfileList());
-    }
-});
+}
 
 // ---------- IP kamera (Dahua, RTSP) ----------
 // Arayuz kameradan taze bir kare alir (/api/kamera/kare) ve onu fotograf gibi /api/olc'ye gonderir; boylece
@@ -194,7 +149,519 @@ app.MapGet("/api/kamera/kare", (HttpRequest req) =>
     return Results.File(frame.ImEncode(".jpg", new ImageEncodingParam(ImwriteFlags.JpegQuality, preview ? 80 : 95)), "image/jpeg");
 });
 
-// Olcum: tabladaki parcalarin koseleri (mm) ve ustten gorunum
+// ---------- Kamera kalibrasyonu (lens + tabla, bir kez) ----------
+// 6 kalibrasyon etiketi (4 kose + uzun kenarlarin ortasi) ile lens bukulmesi ve kameranin tablaya gore konumu
+// hesaplanir, veri/kalibrasyon/lens.txt dosyasina yazilir. Olcumde ("kalibrasyon=1") fotograf bu modelle duz
+// ustten gorunume cevrilir. Kamera, odak ya da yerlesim degisirse yeniden yapilir.
+string lensDir = Path.Combine(dataDir, "kalibrasyon");
+string lensPath = Path.Combine(lensDir, "lens.txt");
+string calibrationPhotoPath = Path.Combine(lensDir, "kalibrasyon.jpg");
+string emptyPath = Path.Combine(lensDir, "bos.jpg");
+// Kameranin lensi (odak, bukulme) ve konumu: koselerin de gorundugu son 6 damali kalibrasyondan. Mavi paspasli
+// kalibrasyonda kose damalari paspasin altinda kalir ve lens o fotograftan cozulemez; buradan alinir. "Sil" bunu silmez
+// (lens kameranin ozelligidir; tabla kalibrasyonu silinse de gecerli).
+string cameraLensPath = Path.Combine(lensDir, "kamera-lens.txt");
+LensCalibration LoadCameraLens()
+{
+    try { return File.Exists(cameraLensPath) ? LensCalibration.Load(cameraLensPath) : null; }
+    catch (Exception e) when (e is FormatException || e is IOException || e is OverflowException) { return null; }
+}
+LensCalibration lensCache = null;
+DateTime lensCacheTime = DateTime.MinValue;
+LensCalibration LoadLens()
+{
+    if (!File.Exists(lensPath)) { lensCache = null; return null; }
+    DateTime w = File.GetLastWriteTimeUtc(lensPath);
+    if (lensCache == null || w != lensCacheTime)
+    {
+        try { lensCache = LensCalibration.Load(lensPath); lensCacheTime = w; }
+        catch (Exception e) when (e is FormatException || e is IOException || e is OverflowException) { lensCache = null; }
+    }
+    return lensCache;
+}
+// Tabla kenari boyunca noktalar (mm): kose sirasi (0,0) -> (0,W) -> (L,W) -> (L,0), kenar basina n parca
+static Point2[] TableBorder(double l, double w, int n)
+{
+    var c = new[] { new Point2(0, 0), new Point2(0, w), new Point2(l, w), new Point2(l, 0) };
+    var pts = new List<Point2>();
+    for (int e = 0; e < 4; e++)
+        for (int i = 0; i < n; i++) pts.Add(c[e] + (c[(e + 1) % 4] - c[e]) * ((double)i / n));
+    return pts.ToArray();
+}
+// Fotografta cizilecek tabla siniri: paspasli kalibrasyonda bulunan dort koseden (tabla tam dik acili olmayabilir),
+// degilse kalibrasyondaki olcunun dikdortgeni
+static Point2[] TableOutline(LensCalibration c, int n)
+{
+    if (c.CornerSource != LensCalibration.CornerSourceMats || c.PaperCorners == null || c.PaperCorners.Length != 4)
+        return TableBorder(c.TableLengthMm, c.TableWidthMm, n);
+    Point2[] k = { c.PaperCorners[2], c.PaperCorners[0], c.PaperCorners[1], c.PaperCorners[3] };   // sol alt, sol ust, sag ust, sag alt
+    var pts = new List<Point2>();
+    for (int e = 0; e < 4; e++)
+        for (int i = 0; i < n; i++) pts.Add(k[e] + (k[(e + 1) % 4] - k[e]) * ((double)i / n));
+    return pts.ToArray();
+}
+static CalibrationTag LensTag(string name) => CalibrationTag.All.FirstOrDefault(t => t.Name == name) ?? CalibrationTag.Normal;
+// Damalarin varsayilan (ya da elle olculmus) merkezleri
+static Point2[] ExpectedCenters(LensCalibration c) => c.MeasuredTagCenters ?? LensCalibrator.TagCenters(c.TableLengthMm, c.TableWidthMm, LensTag(c.TagType));
+// Olcumde damalarin kapladigi alanlar: bulunan gercek yerleri (varsa)
+static Point2[] TagCentersForMasking(LensCalibration c) =>
+    c.BoardPlacements?.Select((p, i) => double.IsNaN(p.X) ? ExpectedCenters(c)[i] : p.Center).ToArray() ?? c.MeasuredTagCenters;
+object LensStatus(LensCalibration c) => c == null ? new { var = false } as object : new
+{
+    var = true,
+    tarih = c.Created.ToString("dd.MM.yyyy HH:mm"),
+    tabla = new { uzunluk = c.TableLengthMm, genislik = c.TableWidthMm },
+    goruntu = new { w = c.ImageWidth, h = c.ImageHeight },
+    hataPx = Math.Round(c.RmsPx, 2),
+    ortalamaMm = Math.Round(c.MeanMm, 2),
+    enKotuMm = Math.Round(c.MaxMm, 2),
+    referansUygun = c.MeetsReferenceTolerance,
+    olculenDamaMerkezleri = c.MeasuredTagCenters?.Select(p => new[] { p.X, p.Y }),
+    nokta = c.Points,
+    etiket = c.TagType,
+    kareMm = LensTag(c.TagType).SquareMm,
+    // Damalarin bulunan gercek yeri: beklenen yerden fark (mm) ve aci (derece), ust uc ve alt uc soldan saga
+    damaYerlesimi = c.BoardPlacements == null ? null : c.BoardPlacements.Select((p, i) => (p, i)).Where(q => !double.IsNaN(q.p.X)).Select(q => new
+    {
+        no = q.i + 1,
+        dx = Math.Round(q.p.X - ExpectedCenters(c)[q.i].X, 1),
+        dy = Math.Round(q.p.Y - ExpectedCenters(c)[q.i].Y, 1),
+        aci = Math.Round(q.p.RotationDeg, 2)
+    }),
+    // Tabla koseleri: "kagit" (kose kagitlarinin dis koseleri) ya da "mavi" (mavi paspaslarin dis koseleri)
+    koseKaynagi = c.CornerSource,
+    paspasKenarMm = double.IsNaN(c.EdgeRmsMm) ? (double?)null : Math.Round(c.EdgeRmsMm, 2),
+    kameraLensi = File.Exists(cameraLensPath) ? File.GetLastWriteTime(cameraLensPath).ToString("dd.MM.yyyy HH:mm") : null,
+    // Kose kagitlarinin dis koselerinin olusturdugu tabla (mm)
+    kagitTabla = c.PaperCorners == null ? null : new
+    {
+        alt = Math.Round(Point2.Distance(c.PaperCorners[2], c.PaperCorners[3]), 1),
+        ust = Math.Round(Point2.Distance(c.PaperCorners[0], c.PaperCorners[1]), 1),
+        sol = Math.Round(Point2.Distance(c.PaperCorners[2], c.PaperCorners[0]), 1),
+        sag = Math.Round(Point2.Distance(c.PaperCorners[3], c.PaperCorners[1]), 1),
+        kosegenFarki = Math.Round(Math.Abs(Point2.Distance(c.PaperCorners[2], c.PaperCorners[1]) - Point2.Distance(c.PaperCorners[3], c.PaperCorners[0])), 1),
+        enBuyukSapma = Math.Round(c.PaperCornerDeviationMm(), 1),
+        koseler = c.PaperCorners.Select(P)
+    },
+    bosTabla = File.Exists(emptyPath),
+    bosTablaTarih = File.Exists(emptyPath) ? File.GetLastWriteTime(emptyPath).ToString("dd.MM.yyyy HH:mm") : null,
+    kamera = new { x = Math.Round(c.CameraPosition().X), y = Math.Round(c.CameraPosition().Y), z = Math.Round(c.CameraPosition().Height) }
+};
+
+// Kalibrasyonlu olcum: bos tabla fotografi varsa karsilastirmayla
+MeasureOutput RunLens(Mat frame, LensCalibration c, MarkerLayout tags, DetectorOptions options, double thickness, string emptyFile = null)
+{
+    emptyFile ??= emptyPath;
+    using Mat empty = File.Exists(emptyFile) ? Cv2.ImRead(emptyFile) : null;
+    return TableMeasure.RunWithLens(frame, c, tags, options, thickness, empty);
+}
+
+app.MapGet("/api/kalibrasyon", () => { lock (gate) return Results.Json(LensStatus(LoadLens())); });
+
+app.MapGet("/api/kalibrasyon/kaydet", () =>
+    SaveCalibrationArchive("kalibrasyon", lensPath, calibrationPhotoPath, cameraLensPath, emptyPath));
+
+app.MapGet("/api/kalibrasyon/incele", () =>
+{
+    lock (gate)
+    {
+        LensCalibration cal = LoadLens();
+        if (cal == null || !File.Exists(calibrationPhotoPath))
+            return Fail("İncelenecek kayıtlı kalibrasyon fotoğrafı bulunamadı.");
+
+        using Mat frame = Cv2.ImRead(calibrationPhotoPath);
+        if (frame.Empty() || frame.Cols != cal.ImageWidth || frame.Rows != cal.ImageHeight)
+            return Fail("Kayıtlı fotoğraf bu kalibrasyonun görüntü boyutuyla uyuşmuyor.");
+
+        double length = cal.TableLengthMm, width = cal.TableWidthMm;
+        double scale = 1200 / Math.Max(length, width);
+        if (!double.IsFinite(scale) || length * scale < 1 || width * scale < 1)
+            return Fail("Kalibrasyondaki tabla ölçüleriyle üstten görünüm oluşturulamıyor.");
+
+        using Mat top = LensCalibrator.TopView(frame, cal, scale);
+        CalibrationTag tag = LensTag(cal.TagType);
+        Point2[] pixels, table;
+        int[] slots;
+        string pointError;
+        if (cal.CornerSource == LensCalibration.CornerSourceMats)
+            pointError = LensCalibrator.MatchSavedBoards(frame, cal, tag, out pixels, out table, out slots);
+        else
+        {
+            pointError = LensCalibrator.MatchBoardPoints(frame, length, width, tag, out _, out pixels, out table, cal.MeasuredTagCenters, cal.BoardPlacements);
+            slots = pixels == null ? null : Enumerable.Range(0, pixels.Length).Select(j => j / (tag.Cols * tag.Rows)).ToArray();
+        }
+        object[] boards = Array.Empty<object>();
+        double[] ValidPoint(Point2 p) => double.IsFinite(p.X) && double.IsFinite(p.Y) ? P(p) : null;
+        if (pointError == null)
+        {
+            Point2[] projected = LensCalibrator.TableToImage(cal, table);
+            Point2[] back = LensCalibrator.ImageToTable(cal, pixels);
+            boards = slots.Distinct().OrderBy(i => i).Select(i =>
+            {
+                int[] indices = Enumerable.Range(0, slots.Length).Where(j => slots[j] == i).ToArray();
+                double[] errors = indices.Select(j => Point2.Distance(back[j], table[j])).ToArray();
+                return (object)new
+                {
+                    no = i + 1,
+                    hataMm = errors.All(double.IsFinite) ? (double?)Math.Round(errors.Average(), 2) : null,
+                    foto = indices.Select(j => new { gorulen = ValidPoint(pixels[j]), beklenen = ValidPoint(projected[j]) }),
+                    tabla = indices.Select(j => new { gorulen = ValidPoint(back[j]), beklenen = ValidPoint(table[j]) })
+                };
+            }).ToArray();
+        }
+
+        string Jpeg(Mat image) => "data:image/jpeg;base64," + Convert.ToBase64String(image.ToBytes(".jpg", new ImageEncodingParam(ImwriteFlags.JpegQuality, 88)));
+        return Results.Json(new
+        {
+            kalibrasyon = LensStatus(cal),
+            foto = Jpeg(frame),
+            ustten = Jpeg(top),
+            cerceve = LensCalibrator.TableToImage(cal, TableOutline(cal, 40)).Select(ValidPoint),
+            sifir = ValidPoint(LensCalibrator.TableToImage(cal, new[] { new Point2(0, 0) })[0]),
+            // Kose kagitlarinin dis koseleri (tabla kosesi kabul edilen noktalar): fotografta ve tablada
+            kagitKoseleri = cal.PaperCorners == null ? null : new
+            {
+                foto = LensCalibrator.TableToImage(cal, cal.PaperCorners).Select(ValidPoint),
+                tabla = cal.PaperCorners.Select(ValidPoint)
+            },
+            damalar = boards,
+            noktaUyarisi = pointError == null ? null : "Kayıtlı karede dama noktaları yeniden eşleştirilemedi. Görüntüler mevcut kalibrasyon modeliyle gösteriliyor."
+        });
+    }
+});
+
+app.MapPost("/api/kalibrasyon", async (HttpRequest req) =>
+{
+    IFormCollection form = await req.ReadFormAsync();
+    byte[] bytes = await ReadFile(form);
+    if (bytes == null) return Fail("Fotoğraf gelmedi.");
+    double length = double.TryParse(form["uzunluk"], NumberStyles.Float, inv, out double l) && l > 0 ? l : 0;
+    double width = double.TryParse(form["genislik"], NumberStyles.Float, inv, out double w) && w > 0 ? w : 0;
+    if (!double.IsFinite(length) || !double.IsFinite(width) || length <= 0 || width <= 0)
+        return Fail("Tablanın uzunluğunu ve genişliğini girin.");
+    Point2[] measuredCenters = null;
+    string geometry = form["damaMerkezleri"].ToString().Trim();
+    if (geometry.Length > 0)
+    {
+        string[] rows = geometry.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (rows.Length != 6) return Fail("Dama merkezlerini 1–6 sırasıyla, her satıra bir X;Y çifti olarak girin.");
+        measuredCenters = new Point2[6];
+        bool Coordinate(string s, out double value) =>
+            double.TryParse(s.Trim().Replace(',', '.'), NumberStyles.Float, inv, out value) && double.IsFinite(value);
+        for (int i = 0; i < rows.Length; i++)
+        {
+            string[] pair = rows[i].Split(';');
+            if (pair.Length != 2 || !Coordinate(pair[0], out double x) || !Coordinate(pair[1], out double y)
+                || x <= 0 || x >= length || y <= 0 || y >= width)
+                return Fail($"{i + 1} numaralı dama için tabla içinde bir X;Y merkezi girin (mm).");
+            measuredCenters[i] = new Point2(x, y);
+        }
+        if (new[] { 0, 1, 3, 4 }.Any(i => measuredCenters[i].X >= measuredCenters[i + 1].X)
+            || measuredCenters.Take(3).Min(p => p.Y) <= measuredCenters.Skip(3).Max(p => p.Y))
+            return Fail("Dama merkezlerini önce üst sırada 1–3, sonra alt sırada 4–6, her sırada soldan sağa girin. Y sol alttan yukarı artar.");
+    }
+    string type = form["etiket"].ToString();
+    CalibrationTag[] tags = type == "otomatik" ? CalibrationTag.All : new[] { LensTag(type) };
+    lock (gate)
+    {
+        using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
+        if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
+        // Kameranin lensi: kayitli; yoksa son kalibrasyon fotografi koseleri de gorunen (6 damali) bir fotografsa ondan
+        LensCalibration cameraLens = LoadCameraLens();
+        if ((cameraLens == null || cameraLens.ImageWidth != frame.Cols || cameraLens.ImageHeight != frame.Rows) && File.Exists(calibrationPhotoPath))
+        {
+            using Mat old = Cv2.ImRead(calibrationPhotoPath);
+            if (!old.Empty() && old.Cols == frame.Cols && old.Rows == frame.Rows)
+                foreach (CalibrationTag tag in tags)
+                {
+                    LensCalibration c0 = LensCalibrator.Calibrate(old, length, width, tag).Calibration;
+                    if (c0 != null && c0.CornerSource == LensCalibration.CornerSourcePaper && c0.MeetsReferenceTolerance)
+                    {
+                        Directory.CreateDirectory(lensDir);
+                        c0.Save(cameraLensPath);
+                        cameraLens = c0;
+                        break;
+                    }
+                }
+        }
+        LensCalibrator.Result best = null;
+        foreach (CalibrationTag tag in tags)
+        {
+            LensCalibrator.Result r = LensCalibrator.Calibrate(frame, length, width, tag, measuredCenters, cameraLens);
+            if (r.Calibration != null && r.Calibration.MeetsReferenceTolerance) { best = r; break; }
+            if (best == null || (r.Calibration != null
+                ? best.Calibration == null || r.Calibration.MaxMm < best.Calibration.MaxMm
+                : best.Calibration == null && r.TagsFound > best.TagsFound))
+                best = r;
+        }
+        if (best.Calibration == null && best.Error.StartsWith(LensCalibrator.NeedsLensError))
+            return Fail("Mavi paspaslar bulundu ama bu kameranın lens bilgisi yok. Köşe damaları paspasın altındayken balık gözü bükülmesi "
+                + "fotoğraftan çözülemiyor. Bir kez paspasları kaldırıp altı dama tam görünürken kalibre edin (lens kaydedilir), "
+                + "sonra paspasları geri koyup yeniden kalibre edin.");
+        if (best.Calibration == null)
+            return Fail(best.Error.Replace(" yerde bulundu; dort kosede de tam gorunmeli.", " yerde bulundu; dört köşede de tam görünmeli.")
+                .Replace("Mavi paspaslar bulundu ama yalniz ", "Mavi paspaslar bulundu ama yalnız ").Replace(" dama gorunuyor; en az iki dama (uzun kenarlarin ortasindakiler) tam gorunmeli.", " dama görünüyor; en az iki dama (uzun kenarların ortasındakiler) tam görünmeli.")
+                .Replace("Mavi paspaslarin koseleri hesaplanamadi (kenarlari duz gorunmuyor).", "Mavi paspasların köşeleri hesaplanamadı (kenarları düz görünmüyor).")
+                .Replace("Mavi paspaslarin kenarlari yeterince gorunmuyor.", "Mavi paspasların kenarları yeterince görünmüyor.")
+                .Replace("Kameranin konumu cozulemedi (damalar).", "Kameranın konumu çözülemedi (damalar).").Replace("Kalibrasyon icin 6 etiket gerekli", "Kalibrasyon için 6 etiket gerekli").Replace(" bulundu. Dort koseye ve iki uzun kenarin ortasina birer etiket koyun; hepsi fotografta net gorunmeli.", " bulundu. Dört köşeye ve iki uzun kenarın ortasına birer etiket koyun; hepsi fotoğrafta net görünmeli.")
+                .Replace("Etiketler iki sira (ust ve alt uzun kenar) olarak gorunmuyor. Kamera tablayi uzun kenari yatay gorecek sekilde bakmali.", "Etiketler iki sıra (üst ve alt uzun kenar) olarak görünmüyor. Kamera tablayı uzun kenarı yatay görecek şekilde bakmalı."));
+        if (!best.Calibration.MeetsReferenceTolerance)
+        {
+            int worstTag = Array.IndexOf(best.TagErrorMm, best.TagErrorMm.Where(double.IsFinite).DefaultIfEmpty(double.NaN).Max()) + 1;
+            return Fail($"Kalibrasyon kaydedilmedi. Ort. hata {best.Calibration.MeanMm:F2} mm, en büyük nokta hatası {best.Calibration.MaxMm:F2} mm (sınır {LensCalibration.MaxReferenceErrorMm:F0} mm). "
+                + $"Önce {worstTag} numaralı damayı kontrol edin (üst sıra 1–3, alt sıra 4–6). "
+                + "Baskı boyutunu, tabla ölçülerini ve dama merkezlerini doğrulayın. Varsa önceki kayıt korundu.");
+        }
+        Directory.CreateDirectory(lensDir);
+        best.Calibration.Save(lensPath);
+        // Koseler de gorundu (6 dama): lens ve kamera konumu ileride mavi paspasli kalibrasyonda kullanilmak uzere saklanir
+        if (best.Calibration.CornerSource == LensCalibration.CornerSourcePaper && measuredCenters == null)
+            best.Calibration.Save(cameraLensPath);
+        File.WriteAllBytes(calibrationPhotoPath, bytes);
+        // Yeni kalibrasyon: kamera oynamis olabilir, eski bos tabla fotografi artik ayni goruntuyu vermez
+        if (File.Exists(emptyPath)) File.Delete(emptyPath);
+        LensCalibration saved = LoadLens();
+        var uyarilar = new List<string>();
+        bool mats = saved.CornerSource == LensCalibration.CornerSourceMats;
+        if (mats && !best.PoseFromPrior)
+            uyarilar.Add($"Kamera, lensin kaydedildiği kalibrasyondan beri oynamış görünüyor (orta damalar {(double.IsNaN(best.PriorBoardRmsPx) ? "eşleşmedi" : best.PriorBoardRmsPx.ToString("F1") + " piksel kayık")}). "
+                + "Kameranın konumu yalnız iki orta damadan bulundu; uçlarda birkaç mm hata olabilir. En iyisi paspasları bir kez kaldırıp altı damayla kalibre edin, sonra paspaslarla yeniden kalibre edin.");
+        if (mats && double.IsFinite(saved.EdgeRmsMm) && saved.EdgeRmsMm > 2.5)
+            uyarilar.Add($"Mavi paspasların kenarları düz görünmüyor (sapma {saved.EdgeRmsMm:F1} mm). Paspaslar tablaya düz yatmalı, kenardan taşmamalı ve kıvrık olmamalı.");
+        double cornerDev = saved.PaperCornerDeviationMm();
+        if (mats && (Math.Abs(saved.TableLengthMm - length) > 10 || Math.Abs(saved.TableWidthMm - width) > 10))
+            uyarilar.Add($"Paspas köşelerinden ölçülen tabla {saved.TableLengthMm:F0} × {saved.TableWidthMm:F0} mm, girilen {length:F0} × {width:F0} mm. "
+                + "Ölçülen kullanıldı (tabla köşeleri paspaslardır). Şeritle ölçtüğünüz paspas köşeleri arası belirgin farklıysa damaların baskı boyutunu (dört kare 100 mm) kontrol edin.");
+        if (mats && !double.IsNaN(cornerDev) && cornerDev > LensCalibration.MaxReferenceErrorMm)
+        {
+            Point2[] pc = saved.PaperCorners;
+            uyarilar.Add($"Mavi paspasların dış köşeleri tam dikdörtgen değil (en büyük fark {cornerDev:F1} mm): "
+                + $"alt {Point2.Distance(pc[2], pc[3]):F1}, üst {Point2.Distance(pc[0], pc[1]):F1}, sol {Point2.Distance(pc[2], pc[0]):F1}, sağ {Point2.Distance(pc[3], pc[1]):F1} mm, "
+                + $"sol üst köşe X {pc[0].X:F1}, sağ üst köşe X {pc[1].X:F1} mm. "
+                + "Sıfır noktası sol alt paspasın dış köşesi, X ekseni sağ alt paspasın dış köşesine doğru alındı; parça ölçüleri bundan etkilenmez. "
+                + "Tablanın kendisi tam dik açılı değilse bu normaldir; değilse paspasları tabla köşelerine tam oturtun.");
+        }
+        else if (!double.IsNaN(cornerDev) && cornerDev > LensCalibration.MaxReferenceErrorMm)
+        {
+            Point2[] pc = saved.PaperCorners;
+            uyarilar.Add($"Köşe kâğıtlarının dış köşeleri {length:F0} × {width:F0} mm dikdörtgen vermiyor (en büyük fark {cornerDev:F1} mm): "
+                + $"alt {Point2.Distance(pc[2], pc[3]):F1}, üst {Point2.Distance(pc[0], pc[1]):F1}, sol {Point2.Distance(pc[2], pc[0]):F1}, sağ {Point2.Distance(pc[3], pc[1]):F1} mm. "
+                + "Sıfır noktası sol alt kâğıdın köşesi, X ekseni sağ alt kâğıdın köşesine doğru alındı; parça ölçüleri bundan etkilenmez. "
+                + "Konumların da tam olması için köşe kâğıtlarını tabla köşesine tam dayayın ya da tablanın gerçek ölçüsünü girin.");
+        }
+        return Results.Json(new { kalibrasyon = LensStatus(saved), etiketHatasiMm = best.TagErrorMm.Select(e => double.IsFinite(e) ? (double?)Math.Round(e, 2) : null), uyarilar });
+    }
+});
+
+// Bos tabla fotografi: kalibrasyondan sonra, damalar kaldirilinca ayni kameradan. Olcumde yalniz bos tabladan
+// farkli yerler parca sayilir (ahsaptaki lekeler, cita aralari, delikler karismaz).
+app.MapPost("/api/kalibrasyon/bos", async (HttpRequest req) =>
+{
+    IFormCollection form = await req.ReadFormAsync();
+    byte[] bytes = await ReadFile(form);
+    if (bytes == null) return Fail("Fotoğraf gelmedi.");
+    lock (gate)
+    {
+        LensCalibration c = LoadLens();
+        if (c == null) return Fail("Önce kalibrasyon yapın.");
+        using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
+        if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
+        if (frame.Cols != c.ImageWidth || frame.Rows != c.ImageHeight)
+            return Fail($"Bu fotoğraf {frame.Cols}x{frame.Rows} piksel, kalibrasyon {c.ImageWidth}x{c.ImageHeight}. Aynı kameranın aynı akışından çekin.");
+        // Damalar hala tabladaysa uyar: bos tabla olarak kaydedilirse olcumde etiket alanlari kor kalir
+        int tags = CheckerFinder.FindAll(frame, LensTag(c.TagType).Cols, LensTag(c.TagType).Rows).Count;
+        if (tags > 0) return Fail($"Fotoğrafta {tags} kalibrasyon daması görünüyor. Boş tabla fotoğrafından önce damaları kaldırın.");
+        File.WriteAllBytes(emptyPath, bytes);
+        return Results.Json(LensStatus(c));
+    }
+});
+
+app.MapPost("/api/kalibrasyon/sil", () =>
+{
+    lock (gate)
+    {
+        if (File.Exists(emptyPath)) File.Delete(emptyPath);
+        if (File.Exists(lensPath)) File.Delete(lensPath);
+        lensCache = null;
+        return Results.Json(LensStatus(null));
+    }
+});
+
+// ---------- Damasiz kamera kalibrasyonu (sabit kamera, bir kez) ----------
+// Kullanici fotografta 4 koseyi (istenirse tablanin ortasini da) isaretler; CornerCalibrator kamerayi cozer. Lens bilgisi
+// damali kalibrasyondan (ayni kamera, ayni cozunurluk) alinir: lens kameranin ozelligidir; yalniz koselerden lens tahmini
+// tablanin ortasindaki olcegi belirleyemez. Damali kalibrasyonun uzerine yazmamak icin ayri klasorde tutulur.
+string cornerDir = Path.Combine(dataDir, "kalibrasyon-damasiz");
+string cornerPath = Path.Combine(cornerDir, "lens.txt");
+string cornerPhotoPath = Path.Combine(cornerDir, "kalibrasyon.jpg");
+string cornerPointsPath = Path.Combine(cornerDir, "noktalar.txt");
+string cornerEmptyPath = Path.Combine(cornerDir, "bos.jpg");
+LensCalibration cornerCache = null;
+DateTime cornerCacheTime = DateTime.MinValue;
+LensCalibration LoadCornerCal()
+{
+    if (!File.Exists(cornerPath)) { cornerCache = null; return null; }
+    DateTime t = File.GetLastWriteTimeUtc(cornerPath);
+    if (cornerCache == null || t != cornerCacheTime)
+    {
+        try { cornerCache = LensCalibration.Load(cornerPath); cornerCacheTime = t; }
+        catch (Exception e) when (e is FormatException || e is IOException || e is OverflowException) { cornerCache = null; }
+    }
+    return cornerCache;
+}
+Point2[] LoadCornerPoints()
+{
+    if (!File.Exists(cornerPointsPath)) return null;
+    try { return ParsePoints(File.ReadAllText(cornerPointsPath)); } catch (FormatException) { return null; }
+}
+// Noktalar CornerCalibrator.TablePoints sirasinda: 4 kose, orta, alt/sag/ust/sol kenar ortasi; isaretlenmeyen "-"
+Point2[] ParsePoints(string text)
+{
+    string[] parts = text.Split(';', StringSplitOptions.TrimEntries);
+    if (parts.Length < 4 || parts.Length > CornerCalibrator.MaxPoints) throw new FormatException("4 ile 9 arası nokta gerekli.");
+    return parts.Select(s =>
+    {
+        if (s == "-" || s == "") return new Point2(double.NaN, double.NaN);
+        string[] xy = s.Split(',');
+        if (xy.Length != 2 || !double.TryParse(xy[0], NumberStyles.Float, inv, out double x) || !double.TryParse(xy[1], NumberStyles.Float, inv, out double y)
+            || !double.IsFinite(x) || !double.IsFinite(y))
+            throw new FormatException("Nokta 'x,y' olmali: " + s);
+        return new Point2(x, y);
+    }).ToArray();
+}
+// Damasiz kalibrasyon icin lens: damali kalibrasyon (ayni goruntu boyutundaysa)
+LensCalibration LensForCorners(int width, int height)
+{
+    foreach (LensCalibration l in new[] { LoadLens(), LoadCameraLens() })
+        if (l != null && l.ImageWidth == width && l.ImageHeight == height) return l;
+    return null;
+}
+object CornerStatus(LensCalibration c) => c == null ? new { var = false, lensVar = LoadLens() != null } as object : new
+{
+    var = true,
+    tarih = c.Created.ToString("dd.MM.yyyy HH:mm"),
+    tabla = new { uzunluk = c.TableLengthMm, genislik = c.TableWidthMm },
+    goruntu = new { w = c.ImageWidth, h = c.ImageHeight },
+    noktaHataPx = Math.Round(c.RmsPx, 1),
+    noktaHataMm = Math.Round(c.MeanMm, 1),
+    kenarMm = double.IsNaN(c.EdgeRmsMm) ? (double?)null : Math.Round(c.EdgeRmsMm, 1),
+    lensKaynagi = c.TagType == "damasiz-lens" ? "damalı kalibrasyon" : "işaretlerden ve kenarlardan",
+    lensVar = LoadLens() != null,
+    bosTabla = File.Exists(cornerEmptyPath),
+    bosTablaTarih = File.Exists(cornerEmptyPath) ? File.GetLastWriteTime(cornerEmptyPath).ToString("dd.MM.yyyy HH:mm") : null,
+    kamera = new { x = Math.Round(c.CameraPosition().X), y = Math.Round(c.CameraPosition().Y), z = Math.Round(c.CameraPosition().Height) }
+};
+
+app.MapGet("/api/kalibrasyon-damasiz", () => { lock (gate) return Results.Json(CornerStatus(LoadCornerCal())); });
+
+// Kalibre et: fotograf + 4/5 nokta (sol alt, sag alt, sag ust, sol ust, [orta]) + tabla olcusu
+app.MapPost("/api/kalibrasyon-damasiz", async (HttpRequest req) =>
+{
+    IFormCollection form = await req.ReadFormAsync();
+    byte[] bytes = await ReadFile(form);
+    if (bytes == null) return Fail("Fotoğraf gelmedi.");
+    double length = double.TryParse(form["uzunluk"], NumberStyles.Float, inv, out double l) && l > 0 ? l : 0;
+    double width = double.TryParse(form["genislik"], NumberStyles.Float, inv, out double w) && w > 0 ? w : 0;
+    if (!double.IsFinite(length) || !double.IsFinite(width) || length <= 0 || width <= 0) return Fail("Tablanın uzunluğunu ve genişliğini girin.");
+    Point2[] points;
+    try { points = ParsePoints(form["noktalar"].ToString()); } catch (FormatException e) { return Fail("Noktalar okunamadı: " + e.Message); }
+    lock (gate)
+    {
+        using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
+        if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
+        LensCalibration lens = LensForCorners(frame.Cols, frame.Rows);
+        // Lens bilinmiyorsa yalniz kose + kenarlar lensi belirleyemez (sanal ve gercek denemede k1 yanlis isaretli, A4 %45
+        // buyuk cikti); kenar ortalari sart. Damali kalibrasyondan lens varsa 4 kose yeter.
+        if (lens == null && points.Skip(5).Count(q => !double.IsNaN(q.X)) < 4)
+            return Fail("Bu kamera için lens bilgisi yok (damalı kalibrasyon yapılmamış), bu yüzden dört kenar ortası da gerekli: tablada her kenarın tam ortasını (iki köşeye eşit uzaklıkta) işaretleyin, 6–9 numaralı yeşil işaretleri oraya sürükleyin ve yeniden Kalibre et’e basın.");
+        CornerCalibrator.Result r = CornerCalibrator.Calibrate(frame, length, width, points, lens);
+        if (r.Calibration == null) return Fail(r.Error);
+        r.Calibration.TagType = r.UsedLens ? "damasiz-lens" : "damasiz";
+        r.Calibration.EdgeRmsMm = r.EdgeRmsMm;
+        Directory.CreateDirectory(cornerDir);
+        r.Calibration.Save(cornerPath);
+        File.WriteAllBytes(cornerPhotoPath, bytes);
+        File.WriteAllText(cornerPointsPath, string.Join(";", points.Select(p => double.IsNaN(p.X) ? "-" : p.X.ToString("R", inv) + "," + p.Y.ToString("R", inv))));
+        if (File.Exists(cornerEmptyPath)) File.Delete(cornerEmptyPath);   // kamera oynamis olabilir
+        var uyarilar = new List<string>();
+        double worstPx = r.PointErrorPx.Where(v => !double.IsNaN(v)).Max();
+        if (worstPx > 8)
+            uyarilar.Add($"İşaretlenen noktalardan biri modelden {worstPx:F0} piksel uzakta ({CornerCalibrator.PointNames[Array.IndexOf(r.PointErrorPx, worstPx)]}). Noktayı yakınlaştırıp tam yerine oturtun; kenar ortasıysa tablada gerçekten ortada mı ölçün.");
+        return Results.Json(new { kalibrasyon = CornerStatus(LoadCornerCal()), uyarilar });
+    }
+});
+
+// Inceleme: fotograf, isaretlenen noktalar, modelin bekledigi yerler, bulunan kenar noktalari, ustten gorunum
+app.MapGet("/api/kalibrasyon-damasiz/kaydet", () =>
+    SaveCalibrationArchive("kalibrasyon-damasiz", cornerPath, cornerPhotoPath, cornerPointsPath, cornerEmptyPath));
+
+app.MapGet("/api/kalibrasyon-damasiz/incele", () =>
+{
+    lock (gate)
+    {
+        LensCalibration cal = LoadCornerCal();
+        Point2[] points = LoadCornerPoints();
+        if (cal == null || points == null || !File.Exists(cornerPhotoPath)) return Fail("Kayıtlı damasız kalibrasyon yok.");
+        using Mat frame = Cv2.ImRead(cornerPhotoPath);
+        if (frame.Empty() || frame.Cols != cal.ImageWidth || frame.Rows != cal.ImageHeight) return Fail("Kayıtlı fotoğraf kalibrasyonla uyuşmuyor.");
+        double length = cal.TableLengthMm, width = cal.TableWidthMm;
+        // Kenar noktalari yeniden bulunur (kayitli modelle): ne kadar oturdugu gorulsun
+        CornerCalibrator.Result r = CornerCalibrator.Calibrate(frame, length, width, points, cal.TagType == "damasiz-lens" ? cal : null);
+        double scale = 1200 / Math.Max(length, width);
+        using Mat top = LensCalibrator.TopView(frame, cal, scale);
+        double[] V(Point2 p) => double.IsFinite(p.X) && double.IsFinite(p.Y) ? P(p) : null;
+        string Jpeg(Mat image) => "data:image/jpeg;base64," + Convert.ToBase64String(image.ToBytes(".jpg", new ImageEncodingParam(ImwriteFlags.JpegQuality, 88)));
+        Point2[] model = LensCalibrator.TableToImage(cal, CornerCalibrator.TablePoints(length, width));
+        return Results.Json(new
+        {
+            kalibrasyon = CornerStatus(cal),
+            foto = Jpeg(frame),
+            ustten = Jpeg(top),
+            cerceve = LensCalibrator.TableToImage(cal, TableBorder(length, width, 40)).Select(V),
+            noktalar = points.Select((p, i) => new { ad = CornerCalibrator.PointNames[i], isaret = V(p), model = V(model[i]), hataPx = double.IsNaN(p.X) ? (double?)null : Math.Round(Point2.Distance(p, model[i]), 1) }),
+            kenarlar = r.Edges?.Select(e => new { p = V(e.Pixel), aykiri = e.Outlier, mm = Math.Round(e.OffsetMm, 1) })
+        });
+    }
+});
+
+// Kayitli kalibrasyon fotografi (noktalari yeniden duzeltmek icin, yeniden sikistirilmadan)
+app.MapGet("/api/kalibrasyon-damasiz/foto", () =>
+{
+    lock (gate)
+        return File.Exists(cornerPhotoPath) ? Results.File(File.ReadAllBytes(cornerPhotoPath), "image/jpeg") : Fail("Kayıtlı fotoğraf yok.");
+});
+
+app.MapPost("/api/kalibrasyon-damasiz/bos", async (HttpRequest req) =>
+{
+    IFormCollection form = await req.ReadFormAsync();
+    byte[] bytes = await ReadFile(form);
+    if (bytes == null) return Fail("Fotoğraf gelmedi.");
+    lock (gate)
+    {
+        LensCalibration c = LoadCornerCal();
+        if (c == null) return Fail("Önce damasız kalibrasyon yapın.");
+        using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
+        if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
+        if (frame.Cols != c.ImageWidth || frame.Rows != c.ImageHeight)
+            return Fail($"Bu fotoğraf {frame.Cols}x{frame.Rows} piksel, kalibrasyon {c.ImageWidth}x{c.ImageHeight}. Aynı kameranın aynı akışından çekin.");
+        File.WriteAllBytes(cornerEmptyPath, bytes);
+        return Results.Json(CornerStatus(c));
+    }
+});
+
+app.MapPost("/api/kalibrasyon-damasiz/sil", () =>
+{
+    lock (gate)
+    {
+        foreach (string f in new[] { cornerPath, cornerPhotoPath, cornerPointsPath, cornerEmptyPath }) if (File.Exists(f)) File.Delete(f);
+        cornerCache = null;
+        return Results.Json(CornerStatus(null));
+    }
+});
+
+// Olcum: kayitli kalibrasyonla (lens + tabla, bir kez yapilir) duzeltilmis fotografta parcalarin koseleri (mm) ve ustten
+// gorunum. "kalibrasyon": "1" damali kalibrasyon (veri/kalibrasyon), "2" damasiz kalibrasyon (veri/kalibrasyon-damasiz).
+// Tabla olcusu kalibrasyondan gelir; her yontem kendi bos tabla fotografini kullanir.
 app.MapPost("/api/olc", async (HttpRequest req) =>
 {
     IFormCollection form = await req.ReadFormAsync();
@@ -202,35 +669,20 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
     if (bytes == null) return Fail("Fotoğraf gelmedi.");
     double thickness = double.TryParse(form["kalinlik"], NumberStyles.Float, inv, out double t) && t >= 0 ? t : 20;
     bool uniformTable = form["tekrenk"] == "1";
-    // Kose dama etiketleri: "kucuk", "buyuk" ya da "normal"; yerlesim tabla olcusunden uretilir.
-    // Bos ise damasiz: tabla koseleri fotograftan (otomatik, elle ya da kayitli tabladan) bulunur.
-    string checker = form["dama"].ToString();
-    // "otomatik": etiket turu bilinmiyor; kucukten baslanir, dort etiket cikmazsa digerleri denenir (asagida)
-    bool autoChecker = checker == "otomatik";
-    if (autoChecker) checker = "kucuk";
-    double formLength = double.TryParse(form["uzunluk"], NumberStyles.Float, inv, out double fl) && fl > 0 ? fl : 0;
-    double formWidth = double.TryParse(form["genislik"], NumberStyles.Float, inv, out double fw) && fw > 0 ? fw : 0;
+    string mode = form["kalibrasyon"].ToString();
+    if (mode != "1" && mode != "2") return Fail("Ölçüm yöntemi seçilmedi: Kalibrasyonlu ya da Damasız kalibrasyon.");
+    bool cornerMode = mode == "2";
     double margin = double.TryParse(form["kenar"], NumberStyles.Float, inv, out double m) ? m : 40;
     lock (gate)
     {
-        if (checker != "" && checker != "buyuk" && checker != "normal" && checker != "kucuk") return Fail("Bilinmeyen etiket türü.");
-        bool checkerless = checker == "";
-        string profileId = form["profil"].ToString();
-        bool hasProfile = checkerless && ValidProfileId(profileId) && File.Exists(Path.Combine(ProfileFolder(profileId), "profil.txt"));
-        if (!hasProfile && (formLength <= 0 || formWidth <= 0)) return Fail("Tablanın uzunluğunu ve genişliğini girin.");
-        // Iki fotografli olcum (6 etiket): "dosya" tablanin Y = 0 (sol uzun kenar) yarisi, "dosya2" Y = genislik
-        // (sag uzun kenar) yarisi. Her biri kendi 4 etiketiyle kalibre edilir, mm izgarasinda birlestirilir.
-        IFormFile second = form.Files.GetFile("dosya2");
-        bool twoView = !checkerless && second != null && second.Length > 0;
-        byte[] bytes2 = null;
-        if (twoView) { using var ms2 = new MemoryStream(); second.CopyTo(ms2); bytes2 = ms2.ToArray(); }
-        MarkerLayout layout = checkerless ? null : CheckerLayout(formLength, formWidth, checker, twoView);
+        LensCalibration lensCal = cornerMode ? LoadCornerCal() : LoadLens();
+        if (lensCal == null) return Fail(cornerMode ? "Damasız kalibrasyon yapılmamış. Önce Damasız kalibrasyon sekmesinde köşeleri işaretleyip kalibre edin."
+            : "Kamera kalibrasyonu yapılmamış. Önce 6 kalibrasyon etiketli bir fotoğrafla kalibrasyon yapın.");
+        double formLength = lensCal.TableLengthMm, formWidth = lensCal.TableWidthMm;   // tabla olcusu kalibrasyondan
+        // Damali kalibrasyonda dama yerleri olcumden cikarilir (damalar tablada unutulduysa parca sanilmasin)
+        MarkerLayout layout = cornerMode ? null : LensCalibrator.TagLayout(formLength, formWidth, LensTag(lensCal.TagType), TagCentersForMasking(lensCal));
         using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
         if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
-        using Mat frame2 = twoView ? Cv2.ImDecode(bytes2, ImreadModes.Color) : null;
-        if (twoView && frame2.Empty()) return Fail("2. fotoğraf bir görüntü olarak okunamadı.");
-        int[] lowIds = { 0, 4, 5, 3 }, highIds = { 4, 1, 2, 5 };   // CheckerLayout(..., twoView) numaralari
-        MarkerFit lowFit = null, highFit = null;
 
         // Kenar puruzu toleransi genis: kameraya bakan kenarda yan yuzey ve golge kenari dalgalandirir
         var options = new DetectorOptions
@@ -242,260 +694,40 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             Locator = new LocatorOptions { SimplifyToleranceMm = 30, MinEdgeMm = 150 },
             RefineEdges = form["parcaIncelt"] != "0"   // parca kenarlarini fotografta cok noktayla oturt (karsilastirma icin kapatilabilir)
         };
-        // Damasiz yolda koseler uc kaynaktan gelebilir: elle verilen (suruklenen) koseler, kayitli tabla
-        // profili (desen eslestirmesi) ya da fotograftan otomatik bulma.
-        Point2[] manualCorners = null;
-        try { manualCorners = ParseCorners(form["koseler"]); } catch (FormatException) { manualCorners = null; }
-        TableMatch profileMatch = null;
-        string profileNote = null;
-        MeasureOutput attempt = null;
-        // Iki kose modu: kullanici yalniz sol ust ve sag alt koseyi verir ("kosegen"); "koseler" tahmindir.
-        // Diger iki kose, verilen koselerden cikan tabla kenarlarinin kesisiminden bulunur.
-        string diag = form["kosegen"].ToString();
-        // Cok noktali tespit: kenar basina birden cok nokta ("kenarNoktalari": kenarlar '|', noktalar ';',
-        // koordinatlar ',' ile; sira ust, sag, alt, sol). Noktalar kenara oturtulur, dogrular uydurulur,
-        // koseler kesisimlerden hesaplanir.
-        string edgeText = form["kenarNoktalari"].ToString();
-        EdgeFitResult edgeFit = null;
-        bool edgeManual = false;
-        if (checkerless && !string.IsNullOrWhiteSpace(edgeText))
-        {
-            List<List<Point2>> groups;
-            try
-            {
-                groups = edgeText.Split('|').Select(g => g.Split(';', StringSplitOptions.RemoveEmptyEntries).Select(t =>
-                {
-                    string[] xy = t.Split(',');
-                    if (xy.Length != 2) throw new FormatException(t);
-                    return new Point2(double.Parse(xy[0], inv), double.Parse(xy[1], inv));
-                }).ToList()).ToList();
-            }
-            catch (FormatException) { return Fail("Kenar noktaları okunamadı."); }
-            if (groups.Count != 4 || groups.Any(g => g.Count < 2)) return Fail("Her kenarda en az iki nokta olmalı.");
-            edgeFit = EdgePointFit.Fit(frame, groups, EdgeSnapPx(frame));
-            if (edgeFit.Corners == null) return Fail(edgeFit.Error);
-            edgeManual = true;
-            attempt = TableMeasure.RunWithCorners(frame, edgeFit.Corners, formLength, formWidth, options, thickness, false);
-        }
-        else if (checkerless && manualCorners != null && !string.IsNullOrWhiteSpace(diag))
-        {
-            string[] dp = diag.Split(';');
-            try
-            {
-                if (dp.Length != 2) throw new FormatException("Iki kose gerekli.");
-                Point2 P2(string t) { string[] xy = t.Split(','); if (xy.Length != 2) throw new FormatException(t); return new Point2(double.Parse(xy[0], inv), double.Parse(xy[1], inv)); }
-                manualCorners = DiagonalCorners.Complete(frame, P2(dp[0]), P2(dp[1]), manualCorners);
-                attempt = TableMeasure.RunWithCorners(frame, manualCorners, formLength, formWidth, options, thickness, false);
-            }
-            catch (Exception e) when (e is FormatException || e is ArgumentException)
-            {
-                return Fail("İki köşeden tabla kenarları bulunamadı: " + e.Message);
-            }
-        }
-        else if (checkerless && manualCorners != null)
-        {
-            // Elle yakinlastirilarak konan kose yalniz birkac piksel duzeltilir; genis pencere dusuk kontrastli
-            // kenarda koseyi ice dogru yanlis cizgiye cekebiliyor (2026-11-18 ofis masasi).
-            attempt = TableMeasure.RunWithCorners(frame, manualCorners, formLength, formWidth, options, thickness, true, Math.Max(3.0, Math.Max(frame.Cols, frame.Rows) / 1000.0));
-        }
-        else if (hasProfile)
-        {
-            TableProfile profile = null;
-            try { profile = TableProfile.Load(Path.Combine(ProfileFolder(profileId), "profil.txt")); }
-            catch (Exception e) when (e is FormatException || e is IOException || e is OverflowException)
-            {
-                // Bozuk profil dosyasi olcumu durdurmasin: koseler fotograftan otomatik bulunur
-                profileNote = "Kayıtlı tabla dosyası okunamadı; köşeler fotoğraftan otomatik bulundu. Tablayı yeniden kaydedin.";
-            }
-            if (profile != null)
-            {
-                using Mat profileImage = Cv2.ImRead(Path.Combine(ProfileFolder(profileId), "referans.jpg"));
-                formLength = profile.TableLengthMm; formWidth = profile.TableWidthMm;
-                attempt = TableMeasure.RunWithProfile(frame, profile, profileImage, options, thickness, out profileMatch);
-                if (attempt.Error != null)
-                {
-                    profileNote = $"Kayıtlı tabla ({profile.Name}) bu fotoğrafla eşleşmedi: {attempt.Error} Köşeler fotoğraftan otomatik bulundu; sarı çerçeveyi kontrol edin.";
-                    attempt.Dispose();
-                    attempt = TableMeasure.RunSingle(frame, formLength, formWidth, options, thickness);
-                }
-            }
-        }
-        MeasureOutput RunTags(MarkerLayout l)
-        {
-            if (!twoView) return TableMeasure.RunWithTags(frame, l, options, thickness);
-            MeasureOutput r = TableMeasure.RunTwoViews(frame, frame2, l, lowIds, highIds, options, thickness, out MarkerFit lf, out MarkerFit hf);
-            lowFit = lf; highFit = hf;
-            return r;
-        }
-        if (attempt == null)
-            attempt = checkerless
-                ? TableMeasure.RunSingle(frame, formLength, formWidth, options, thickness)
-                : RunTags(layout);
-        // Secilen etiket turunde etiketler cikmazsa digerleri denenir: yanlis tur secmek olcumu bozmasin
-        string usedChecker = checker;
-        if (layout != null && layout.Kind == "dama" && checker != "" && attempt.Error != null && (twoView || attempt.Error.StartsWith("Yeterli isaret")))
-        {
-            MarkerFit keepLow = lowFit, keepHigh = highFit;
-            foreach (string other in new[] { "kucuk", "buyuk", "normal" })
-            {
-                if (other == checker) continue;
-                MarkerLayout l2 = CheckerLayout(formLength, formWidth, other, twoView);
-                MeasureOutput r2 = RunTags(l2);
-                if (r2.Error == null) { attempt.Dispose(); attempt = r2; layout = l2; usedChecker = other; keepLow = lowFit; keepHigh = highFit; break; }
-                r2.Dispose();
-            }
-            lowFit = keepLow; highFit = keepHigh;
-        }
-        // Elle nokta verilmediyse: bulunan dortgenin her kenarina noktalar konup oturtulur; kenarlarin ne kadar
-        // duz oldugu gosterilir ve kullanici bu noktalardan baslayarak duzeltebilir.
-        if (checkerless && edgeFit == null && attempt.Error == null && attempt.Calibration != null)
-        {
-            TableCalibration uc = attempt.Calibration;
-            var guess = new[] { uc.CornerOrigin, uc.CornerYEnd, uc.CornerFar, uc.CornerXEnd };
-            edgeFit = EdgePointFit.Fit(frame, EdgePointFit.Sample(guess, 7), EdgeSnapPx(frame));
-        }
-        // Lens bukulmesi (cekul yontemi): tablanin dort kenari gercekte duzdur. Kenar noktalarini duzlestiren
-        // katsayi bulunursa fotograf duzlestirilir, noktalar orada yeniden oturtulur ve olcum duz goruntude yapilir.
-        // Arayuze giden koseler ve noktalar fotograftaki (bukuk) yerlerine geri cevrilir.
-        LensModel lens = null;
-        double lensBefore = double.NaN, lensAfter = double.NaN;
-        if (checkerless && form["lens"] != "0" && edgeFit?.Edges != null && attempt.Error == null)
-        {
-            lens = LensCorrection.Estimate(frame.Cols, frame.Rows, edgeFit.Edges, out lensBefore, out lensAfter);
-            if (lens != null)
-            {
-                using Mat flat = lens.UndistortImage(frame);
-                var flatPoints = edgeFit.Edges.Select(e => e.Points.Select(lens.Undistort).ToList()).ToList();
-                EdgeFitResult flatFit = EdgePointFit.Fit(flat, flatPoints, 3.0);
-                MeasureOutput flatAttempt = flatFit.Corners == null ? null
-                    : TableMeasure.RunWithCorners(flat, flatFit.Corners, formLength, formWidth, options, thickness, false);
-                if (flatAttempt != null && flatAttempt.Error == null)
-                {
-                    flatAttempt.ProfileMatched = attempt.ProfileMatched;
-                    attempt.Dispose();
-                    attempt = flatAttempt;
-                    // Gosterim icin noktalar fotograftaki yerlerine (sapmalar duz goruntudeki degerler)
-                    foreach (FittedEdge fe in flatFit.Edges) fe.Points = fe.Points.Select(lens.Distort).ToArray();
-                    edgeFit = flatFit;
-                }
-                else
-                {
-                    flatAttempt?.Dispose();
-                    lens = null;
-                }
-            }
-        }
-        using MeasureOutput result = attempt;
-        string checkerName(string t) => t == "kucuk" ? "Küçük" : t == "buyuk" ? "Büyük kareli" : "Normal";
-        var isaretler = result.Markers == null ? null : new
-        {
-            kullanilan = result.Markers.Used,
-            gorunmeyen = result.Markers.Missing,
-            atilan = result.Markers.Rejected,
-            ortalamaMm = Math.Round(result.Markers.RmsMm, 1),
-            enKotuMm = Math.Round(result.Markers.MaxMm, 1),
-            noktalar = result.Markers.GridPoints,
-            baskiOlcegi = double.IsNaN(result.Markers.PrintScale) ? (double?)null : Math.Round(result.Markers.PrintScale, 3),
-            xyOrani = double.IsNaN(result.Markers.AxisRatio) ? (double?)null : Math.Round(result.Markers.AxisRatio, 3)
-        };
-        var profil = profileMatch == null ? null : new
-        {
-            eslesti = result.ProfileMatched,
-            eslesme = profileMatch.Matches,
-            uyumlu = profileMatch.Inliers,
-            hataPx = double.IsNaN(profileMatch.RmsPx) ? (double?)null : Math.Round(profileMatch.RmsPx, 2)
-        };
-        // Iki fotografli olcumde her fotografin kendi kalibrasyonu: kullanilan etiketler, izgara hatasi, kamera konumu
-        object HalfInfo(MarkerFit f) => f == null ? null : new
-        {
-            basarili = f.Calibration != null,
-            kullanilan = f.Used,
-            noktalar = f.GridPoints,
-            ortalamaMm = Math.Round(f.RmsMm, 2),
-            enKotuMm = Math.Round(f.MaxMm, 2),
-            baskiOlcegi = double.IsNaN(f.PrintScale) ? (double?)null : Math.Round(f.PrintScale, 3),
-            kamera = f.Calibration?.Camera == null ? null : new { x = Math.Round(f.Calibration.Camera.X), y = Math.Round(f.Calibration.Camera.Y), z = Math.Round(f.Calibration.Camera.Height) },
-            tablaKoseleri = f.Calibration == null ? null : new[] { f.Calibration.CornerOrigin, f.Calibration.CornerYEnd, f.Calibration.CornerFar, f.Calibration.CornerXEnd }.Select(P)
-        };
-        var ikiFoto = twoView ? new { foto1 = HalfInfo(lowFit), foto2 = HalfInfo(highFit) } : null;
+        string method = cornerMode ? "damasiz-kalibrasyon" : "kalibrasyon";
+        using MeasureOutput result = RunLens(frame, lensCal, layout, options, thickness, cornerMode ? cornerEmptyPath : emptyPath);
         if (result.Error != null)
         {
-            var failNotes = new List<string>();
-            if (profileNote != null) failNotes.Add(profileNote);
-            SaveMeasurement(bytes, thickness, formLength, formWidth, result, null, failNotes, checker, bytes2);   // basarisiz olcum de incelensin
-            return Results.Json(new { hata = TurkceHata(result.Error), isaretler, profil, ikiFoto }, statusCode: 400);
+            SaveMeasurement(bytes, thickness, formLength, formWidth, result, new List<string>(), method);   // basarisiz olcum de incelensin
+            return Results.Json(new { hata = TurkceHata(result.Error) }, statusCode: 400);
         }
-        List<SlabResult> slabs = result.Slabs;
-        // Guven: tabla koseleri ne kadar guvenilir bulundu (kenar destegi + kamera tutarliligi).
-        // Tutarlilik kirpilmamis fotografta ~1 olmali; uzaklasmasi koselerin ya da tabla olcusunun yanlis olabilecegini gosterir.
-        double? consistency = result.Calibration?.Camera == null ? (double?)null : result.Calibration.Camera.Consistency;
         var uyarilar = new List<string>();
-        if (profileNote != null) uyarilar.Add(profileNote);
-        // Cok noktali denetim: kenar noktalari duz bir cizgiye oturmuyorsa kose yanlis olabilir
-        if (edgeFit?.Edges != null)
-        {
-            string[] edgeNames = { "Üst", "Sağ", "Alt", "Sol" };
-            for (int i = 0; i < 4; i++)
-            {
-                FittedEdge fe = edgeFit.Edges[i];
-                int bad = fe.Inlier.Count(b => !b);
-                if (bad > 0 || !fe.Straight)
-                    uyarilar.Add($"{edgeNames[i]} kenar: " + (bad > 0 ? $"{bad} nokta çizgiye uymadı" : "") + (bad > 0 && !fe.Straight ? ", " : "")
-                        + (!fe.Straight ? $"kenar düz değil (en büyük sapma {fe.Max:F1} px)" : "")
-                        + ". Köşeler yanlış olabilir; Fotoğraf sekmesinde o kenarın noktalarını gerçek kenara sürükleyin.");
-            }
-        }
-        // Profilden tasinan koselerde de gosterilir: yanlis desen eslesmesini ortaya cikaran tek isaret bu
-        if (manualCorners == null && !double.IsNaN(result.TableSupport) && result.TableSupport < 0.8)
-            uyarilar.Add($"Tabla kenarları zayıf bulundu (%{result.TableSupport * 100:F0}).");
-        if (result.Markers != null && !double.IsNaN(result.Markers.PrintScale) && Math.Abs(result.Markers.PrintScale - 1) > 0.02)
-            uyarilar.Add($"Köşe etiketleri gerçek boyutta değil, yaklaşık %{result.Markers.PrintScale * 100:F0} ölçekle basılmış görünüyor (kareler {layout.SquareMm * result.Markers.PrintScale:F1} mm, olması gereken {layout.SquareMm:F0} mm). Ölçüm buna göre düzeltildi; en doğru sonuç için etiketleri yazdırırken ölçeği %100 / \"Gerçek boyut\" seçin (\"Sayfaya sığdır\" değil).");
-        if (result.Markers != null && !double.IsNaN(result.Markers.AxisRatio) && Math.Abs(result.Markers.AxisRatio - 1) > 0.025)
-            uyarilar.Add($"Etiket kareleri tablanın uzun ve kısa yönünde farklı boyda görünüyor (oran {result.Markers.AxisRatio:F2}). Girilen tabla uzunluğu ya da genişliği hatalı olabilir veya bir etiket köşeye tam dayalı değil.");
-        // Esik genis: telefon fotograflarinda koseler dogruyken de 0,78-1,39 goruldu (2026-11-17, A4 0-3 mm);
-        // yalniz belirgin bozuklukta (0,38 gibi: kenar yanlis cizgiye oturmus) uyar.
-        if (result.Markers == null && consistency != null && (consistency < 0.6 || consistency > 1.6))
-            uyarilar.Add($"Tabla köşeleri kamera geometrisiyle tam uyuşmuyor (tutarlılık {consistency:F2}). Köşeler ya da girilen tabla ölçüsü hatalı olabilir; Fotoğraf sekmesinde sarı çerçeveyi kontrol edin.");
-        if (usedChecker != checker && !autoChecker)
-            uyarilar.Insert(0, $"Seçili etiket türü ({checkerName(checker)}) fotoğraftaki etiketlere uymadı; etiketler {checkerName(usedChecker)} olarak tanındı ve ölçüm buna göre yapıldı. Ayarlardan doğru türü seçebilirsiniz.");
-        string logId = SaveMeasurement(bytes, thickness, formLength, formWidth, result, consistency, uyarilar, usedChecker, bytes2);
+        bool calibrationTrusted = cornerMode || lensCal.MeetsReferenceTolerance;
+        if (cornerMode && lensCal.TagType != "damasiz-lens" && (LoadCornerPoints()?.Count(q => !double.IsNaN(q.X)) ?? 0) < 8)
+            uyarilar.Add("Damasız kalibrasyonda kenar ortaları işaretlenmedi: lens kenarlardan tahmin edildi, tablanın ortasındaki ölçüler birkaç yüzde sapabilir. Kalibrasyonu dört kenar ortasıyla (6–9 numaralı işaretler) yenileyin.");
+        if (!calibrationTrusted)
+            uyarilar.Add($"Kayıtlı kalibrasyonda en büyük referans hatası {lensCal.MaxMm:F2} mm. Ölçüler yalnızca önizlemedir; kullanmadan önce yeniden kalibre edin.");
+        if (!result.UsedReference)
+            uyarilar.Add(cornerMode ? "Boş tabla fotoğrafı kayıtlı değil: tablanın üzerindeki lekeler, çizikler ya da çıta araları parça sanılabilir. Damasız kalibrasyon bölümünden boş tablayı bir kez kaydedin."
+                : "Boş tabla fotoğrafı kayıtlı değil: tablanın üzerindeki lekeler, çizikler ya da çıta araları parça sanılabilir. Damaları kaldırdıktan sonra Kamera kalibrasyonu bölümünden boş tablayı bir kez kaydedin.");
+        string logId = SaveMeasurement(bytes, thickness, formLength, formWidth, result, uyarilar, method, calibrationTrusted);
         TableCalibration used = result.Calibration;
         string image = "data:image/jpeg;base64," + Convert.ToBase64String(result.Rectified.ToBytes(".jpg"));
         return Results.Json(new
         {
             tabla = new { uzunluk = used.TableLengthMm, genislik = used.TableWidthMm },
             kalinlik = thickness,
-            tekFoto = checkerless,
-            goruntuBoyutu = new { w = used.ImageWidth, h = used.ImageHeight },
-            // Duzlestirilmis goruntude olculduyse koseler fotograftaki yerlerine geri cevrilir (arayuz fotografi cizer)
-            tablaKoseleri = new[] { used.CornerOrigin, used.CornerYEnd, used.CornerFar, used.CornerXEnd }.Select(c => P(lens == null ? c : lens.Distort(c))),
-            lens = new
-            {
-                duzeltildi = lens != null,
-                katsayi = lens == null ? 0 : Math.Round(lens.K, 4),
-                denenen = Math.Round(LensCorrection.LastK, 4),
-                oncePx = double.IsNaN(lensBefore) ? (double?)null : Math.Round(lensBefore, 2),
-                sonraPx = double.IsNaN(lensAfter) ? (double?)null : Math.Round(lensAfter, 2)
-            },
-            tutarlilik = used.Camera == null ? (double?)null : Math.Round(used.Camera.Consistency, 2),
-            kenarDestegi = double.IsNaN(result.TableSupport) ? (double?)null : Math.Round(result.TableSupport, 2),
+            // Olcum ustten gorunumde yapilir; arayuz fotografi cizdigi icin boyut ve koseler fotograftaki
+            goruntuBoyutu = new { w = frame.Cols, h = frame.Rows },
+            tablaKoseleri = LensCalibrator.TableToImage(lensCal, new[] { new Point2(0, 0), new Point2(0, formWidth), new Point2(formLength, formWidth), new Point2(formLength, 0) }).Select(P),
+            kalibrasyon = cornerMode ? CornerStatus(lensCal) : LensStatus(lensCal),
+            // Tablanin kenari fotografta lens bukulmesiyle egri gorunur: kenar boyunca noktalar (arayuz cizer)
+            tablaKenari = LensCalibrator.TableToImage(lensCal, TableBorder(formLength, formWidth, 40)).Select(P),
             uyarilar,
-            profil,
-            koseKaynagi = edgeManual ? "noktalar" : result.ProfileMatched ? "profil" : manualCorners != null ? "elle" : checkerless ? "otomatik" : "etiket",
-            etiketTuru = checkerless ? null : usedChecker,
-            ikiFoto,
-            kenarlar = edgeFit?.Edges?.Select(e => new
-            {
-                noktalar = e.Points.Select((pt, i) => new object[] { Math.Round(pt.X, 2), Math.Round(pt.Y, 2), Math.Round(e.Residuals[i], 2), e.Inlier[i], e.Snapped[i] }),
-                ortalamaPx = Math.Round(e.Rms, 2),
-                enBuyukPx = Math.Round(e.Max, 2),
-                duz = e.Straight,
-                aykiri = e.Inlier.Count(b => !b)
-            }),
+            koseKaynagi = cornerMode ? "kalibrasyon-damasiz" : "kalibrasyon",
             kayit = logId,
-            isaretler,
             goruntu = image,
-            parcalar = slabs.Select(s => new
+            parcalar = result.Slabs.Select(s => new
             {
                 sekil = s.Shape.ToString(),
                 alanCm2 = Math.Round(s.AreaMm2 / 100),
@@ -503,59 +735,17 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
                 koseler = s.Vertices.Select(v => new[] { Math.Round(v.X, 1), Math.Round(v.Y, 1) }),
                 kenarlar = s.EdgeLengths.Select(e => Math.Round(e)),
                 acilar = s.AnglesDeg.Select(a => Math.Round(a, 1)),
-                guvenilir = s.IsReliable,
+                guvenilir = calibrationTrusted && s.IsReliable,
                 yontem = s.Method,
-                not = s.Note
+                not = !calibrationTrusted ? "Kalibrasyon referans hatası sınırı aşıyor." : s.Note
             })
         });
     }
 });
 
-// Tablanin dort kosesine A4 yatay dama etiketi: sayfa kenarlari tabla kenarina dayali, sayfanin uzun kenari
-// tablanin uzun kenari (X) boyunca. Desen sayfanin ortasinda: merkez = kose + (148.5, 105) mm iceri.
-// sixTags: iki fotografli olcum icin kisa kenarlarin ortasina iki etiket daha (numara 4: X = 0 kenari, 5: X = uzunluk
-// kenari), 90 derece cevrik: etiketin uzun kenari tablanin kisa kenari (Y) boyunca. Cevrik oldugu icin koseler ve
-// ortalar birbirinden ayrilir.
-static MarkerLayout CheckerLayout(double lengthMm, double widthMm, string type, bool sixTags = false)
-{
-    // Etiket kenarlari tabla kenarina dayali, etiketin uzun kenari tablanin uzun kenari (X) boyunca.
-    // buyuk/normal: A4 sayfanin tamami (297 x 210); kucuk: kesim cizgisinden kesilmis 170 x 140 mm etiket.
-    // square: tasarim kare kenari (mm); tum ic koselerle kalibrasyon ve baski olcegi tahmini icin.
-    int cols, rows; double hx, hy, size, square; bool cut = false;
-    switch (type)
-    {
-        case "buyuk": cols = 6; rows = 4; hx = 148.5; hy = 105; size = 266; square = 38; break;
-        case "kucuk": cols = 4; rows = 3; hx = 85; hy = 70; size = 170; square = 30; cut = true; break;
-        default: cols = 9; rows = 6; hx = 148.5; hy = 105; size = 250; square = 25; break;
-    }
-    var l = new MarkerLayout { TableLengthMm = lengthMm, TableWidthMm = widthMm, MarkerHeightMm = 0, Kind = "dama", PatternCols = cols, PatternRows = rows, MarkerSizeMm = size, SquareMm = square, CutTag = cut };
-    l.Markers.Add(new MarkerPoint(0, hx, hy));
-    l.Markers.Add(new MarkerPoint(1, hx, widthMm - hy));
-    l.Markers.Add(new MarkerPoint(2, lengthMm - hx, widthMm - hy));
-    l.Markers.Add(new MarkerPoint(3, lengthMm - hx, hy));
-    if (sixTags)
-    {
-        // Cevrik etiket kenara kisa kenariyla dayanir: merkezi kenardan hy (etiketin kisa yarisi) iceride
-        l.Markers.Add(new MarkerPoint(4, hy, widthMm / 2));
-        l.Markers.Add(new MarkerPoint(5, lengthMm - hy, widthMm / 2));
-        l.Rotated.Add(4); l.Rotated.Add(5);
-        l.StrictOrientation = true;
-    }
-    return l;
-}
-
-// Yazdirilacak kose etiketleri (PDF)
-app.MapGet("/api/etiket/{tur}", (string tur) =>
-{
-    string file = tur == "buyuk" ? "dama_kose_etiketleri_buyuk_kare_A4.pdf" : tur == "normal" ? "dama_kose_etiketleri_A4.pdf" : tur == "kucuk" ? "dama_kose_etiketleri_kucuk_A4.pdf" : null;
-    if (repoRoot == null || file == null) return Results.NotFound();
-    string path = Path.Combine(repoRoot, "ornek", "dama", file);
-    return File.Exists(path) ? Results.File(path, "application/pdf", file) : Results.NotFound();
-});
-
-// Olcum kaydi: her olcumun fotografi ve sonucu veri/olcumler altinda saklanir (git disi, yalniz bu bilgisayarda).
+// Olcum kaydi: her olcumun fotografi ve sonucu D:\SMO\photos\olcumler altinda saklanir (git disi, yalniz bu bilgisayarda).
 // Sapan olcumleri sonradan inceleyebilmek icin. En fazla 300 olcum tutulur; eskileri silinir.
-string SaveMeasurement(byte[] photo, double thicknessMm, double lengthMm, double widthMm, MeasureOutput r, double? consistency, List<string> warnings, string tagType, byte[] photo2 = null)
+string SaveMeasurement(byte[] photo, double thicknessMm, double lengthMm, double widthMm, MeasureOutput r, List<string> warnings, string method, bool calibrationTrusted = true)
 {
     try
     {
@@ -563,7 +753,6 @@ string SaveMeasurement(byte[] photo, double thicknessMm, double lengthMm, double
         Directory.CreateDirectory(dir);
         string id = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
         File.WriteAllBytes(Path.Combine(dir, id + ".jpg"), photo);
-        if (photo2 != null) File.WriteAllBytes(Path.Combine(dir, id + "_2.jpg"), photo2);   // iki fotografli olcumun 2. fotografi
         var c = r.Calibration;
         var info = new
         {
@@ -571,16 +760,14 @@ string SaveMeasurement(byte[] photo, double thicknessMm, double lengthMm, double
             kalinlik = thicknessMm,
             tabla = c == null ? null : new { uzunluk = c.TableLengthMm, genislik = c.TableWidthMm },
             istenenTabla = new { uzunluk = lengthMm, genislik = widthMm },
-            etiket = tagType,
+            yontem = method,
             goruntu = c == null ? null : new { w = c.ImageWidth, h = c.ImageHeight },
-            tablaKoseleri = c == null ? null : new[] { P(c.CornerOrigin), P(c.CornerYEnd), P(c.CornerFar), P(c.CornerXEnd) },
-            tutarlilik = consistency,
-            kenarDestegi = double.IsNaN(r.TableSupport) ? (double?)null : r.TableSupport,
             uyarilar = warnings,
             hata = r.Error,
-            parcalar = r.Slabs.Select(s => new { s.Method, s.IsReliable, kenarlar = s.EdgeLengths, koseler = s.Vertices.Select(P) })
+            parcalar = r.Slabs.Select(s => new { s.Method, IsReliable = calibrationTrusted && s.IsReliable, kenarlar = s.EdgeLengths, koseler = s.Vertices.Select(P) })
         };
         File.WriteAllText(Path.Combine(dir, id + ".json"), System.Text.Json.JsonSerializer.Serialize(info, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        // Eski iki fotografli olcumlerin "_2.jpg" dosyalari da kendi olcumleriyle birlikte silinir
         foreach (string old in Directory.GetFiles(dir, "*.jpg").Where(f => !f.EndsWith("_2.jpg")).OrderByDescending(f => f).Skip(300))
         {
             File.Delete(old);
@@ -596,15 +783,12 @@ string SaveMeasurement(byte[] photo, double thicknessMm, double lengthMm, double
 
 // Cekirdek kutuphanenin ASCII mesajlarini arayuz icin Turkce harflere cevirir
 static string TurkceHata(string m) => m
-    .Replace("1. fotograf (Y = 0 tarafi): ", "1. fotoğraf (sol uzun kenar, Y = 0): ").Replace("2. fotograf (Y = genislik tarafi): ", "2. fotoğraf (sağ uzun kenar, Y = genişlik): ")
-    .Replace("Etiketler bu yarinin yerlesimine uymuyor. Ortadaki iki etiket 90 derece cevrik (uzun kenari tablanin kisa kenari boyunca) konmali; fotografta bu yarinin iki kose etiketi ve iki orta etiketi gorunmeli.",
-             "Etiketler bu yarının yerleşimine uymuyor. Kısa kenarların ortasındaki iki etiket 90° çevrik (uzun kenarı tablanın kısa kenarı boyunca) konmalı; fotoğrafta bu yarının iki köşe etiketi ve iki orta etiketi görünmeli.")
-    .Replace("Yeterli isaret gorunmuyor: ", "Köşe etiketlerinden yalnızca ").Replace(" bulundu, en az 4 gerekli.", " tanesi bulundu; dört köşedeki etiketin dördü de fotoğrafta net ve yeterince büyük görünmeli.").Replace("bulundu", "bulundu")
-    .Replace("Isaretler birbiriyle uyusmuyor", "İşaretler birbiriyle uyuşmuyor").Replace("en buyuk fark", "en büyük fark")
-    .Replace("Bir isaret yerinden oynamis olabilir; daha fazla isaret gorunur olmali.", "Bir işaret yerinden oynamış olabilir; daha fazla işaret görünür olmalı.")
-    .Replace("Isaretler gecerli bir kalibrasyon vermiyor (ayni dogru uzerinde olabilirler).", "İşaretler geçerli bir kalibrasyon vermiyor (aynı doğru üzerinde olabilirler).")
-    .Replace("Bu fotograf", "Bu fotoğraf").Replace("Ayni kameradan cekilmis bir fotograf yukleyin ya da kurulumu yenileyin.", "Aynı kameradan çekilmiş bir fotoğraf yükleyin ya da kurulumu yenileyin.")
-    .Replace("Kalibrasyon yok: once kurulum yapin.", "Kalibrasyon yok: önce kurulum yapın.")
-    .Replace("Tabla bu fotografta bulunamadi. Tablanin tamami gorunecek sekilde yeniden cekin.", "Tabla bu fotoğrafta bulunamadı. Tablanın tamamı görünecek şekilde yeniden çekin.");
+    .Replace(" piksel fotografla yapildi. Ayni kameranin ayni akisindan cekin ya da kalibrasyonu yenileyin.", " piksel fotoğrafla yapıldı. Aynı kameranın aynı akışından (ana akış) çekin ya da kalibrasyonu yenileyin.")
+    .Replace("Bu fotograf", "Bu fotoğraf");
 
-app.Run();
+try { app.Run(); }
+catch (IOException error) when (error.InnerException is Microsoft.AspNetCore.Connections.AddressInUseException)
+{
+    Console.Error.WriteLine("Port kullanımda. Önceki Köprü Kesim sunucusunu durdurun veya başlatıcıya farklı bir port verin.");
+    Environment.ExitCode = 3;
+}

@@ -3,7 +3,7 @@ using System;
 namespace KopruKesim.Core
 {
     /// <summary>
-    /// Tabla ve kamera kalibrasyonu. Koordinat sistemi: orijin tablanin secilen kosesi,
+    /// Tabla ve kamera kalibrasyonu. Koordinat sistemi: orijin referans kamera goruntusundeki sol alt tabla kosesi,
     /// X tablanin uzun kenari boyunca, Y kisa kenari boyunca (yatay ekranda X saga, Y yukari).
     /// </summary>
     public sealed class TableCalibration

@@ -204,153 +204,153 @@ static class Program
             Console.WriteLine("    K" + (i + 1) + " " + r.Vertices[i] + "  aci " + r.AnglesDeg[i].ToString("F1") + "  kenar " + r.EdgeLengths[i].ToString("F0") + " mm");
     }
 
-    /// <summary>
-    /// Kose dama etiketleri %95 olcekle basilmis, kesilip koselere dayanmis: merkezler kuculur, kareler 28,5 mm.
-    /// Yalniz merkezlerle (nominal yerlesim) olcek hatali; tum koselerle baski olcegi bulunup duzeltilmeli.
-    /// </summary>
-    static void TestCheckerGrid()
+    /// <summary>Kamera kalibrasyonu dosyaya yazilip okunur; kamera konumu (C = -R^T t) dogru hesaplanir.</summary>
+    static void TestLensCalibrationFile()
     {
-        Console.WriteLine("Dama izgarasi ve baski olcegi:");
-        double L = 1500, W = 800, sq = 30, s = 0.95;
-        // Egik kamera: tabla -> goruntu
-        var tableCorners = new[] { new Point2(0, 0), new Point2(0, W), new Point2(L, W), new Point2(L, 0) };
-        var img = new[] { new Point2(1450, 540), new Point2(2300, 550), new Point2(2780, 1690), new Point2(960, 1680) };
-        Homography toImg = Homography.FromPoints(tableCorners, img);
-        var layout = new MarkerLayout { TableLengthMm = L, TableWidthMm = W, Kind = "dama", PatternCols = 4, PatternRows = 3, SquareMm = sq, CutTag = true };
-        var nominal = new[] { new Point2(85, 70), new Point2(85, W - 70), new Point2(L - 85, W - 70), new Point2(L - 85, 70) };
-        var seen = new Dictionary<int, Point2>();
-        var corners = new Dictionary<int, Point2[]>();
-        var rnd = new Random(3);
-        for (int id = 0; id < 4; id++)
+        Console.WriteLine("Kamera kalibrasyonu dosyasi:");
+        // Kamera tablanin (1500, 900) noktasinin 1300 mm ustunde, 10 derece Z ekseninde donuk
+        double a = 10 * Math.PI / 180, c = Math.Cos(a), s = Math.Sin(a);
+        double[] R = { c, -s, 0, s, c, 0, 0, 0, 1 };
+        double[] C = { 1500, 900, -1300 };
+        double[] t = { -(R[0] * C[0] + R[1] * C[1] + R[2] * C[2]), -(R[3] * C[0] + R[4] * C[1] + R[5] * C[2]), -(R[6] * C[0] + R[7] * C[1] + R[8] * C[2]) };
+        var cal = new LensCalibration
         {
-            layout.Markers.Add(new MarkerPoint(id, nominal[id].X, nominal[id].Y));
-            Point2 corner = tableCorners[id];
-            Point2 center = corner + (nominal[id] - corner) * s;   // gercek (kucuk basilmis) merkez
-            var pts = new Point2[12];
-            // Etiketler 180 derece donuk de olabilir: dedektor sirasi her etikette farkli
-            bool flip = id % 2 == 1;
-            for (int j = 0; j < 3; j++)
-                for (int i = 0; i < 4; i++)
-                {
-                    double ox = (i - 1.5) * sq * s, oy = (j - 1) * sq * s;
-                    if (flip) { ox = -ox; oy = -oy; }
-                    Point2 p = toImg.Transform(center + new Point2(ox, oy));
-                    pts[j * 4 + i] = new Point2(p.X + (rnd.NextDouble() - 0.5) * 0.3, p.Y + (rnd.NextDouble() - 0.5) * 0.3);
-                }
-            corners[id] = pts;
-            seen[id] = toImg.Transform(center);
-        }
-        // A4 kagidin gercek koseleri ve olculen kenari
-        var a4 = new[] { new Point2(600, 300), new Point2(897, 300), new Point2(897, 510), new Point2(600, 510) };
-        Func<MarkerFit, double> a4Length = f =>
-        {
-            Homography h = f.Calibration.ImageToTable;
-            return Point2.Distance(h.Transform(toImg.Transform(a4[0])), h.Transform(toImg.Transform(a4[1])));
+            TableLengthMm = 3000, TableWidthMm = 1800, ImageWidth = 1920, ImageHeight = 1080,
+            Fx = 820, Fy = 820, Cx = 960, Cy = 540, Distortion = new[] { -0.31, 0.105, 0, 0, -0.016 },
+            Rvec = new[] { 0, 0, a }, Tvec = t, RmsPx = 0.21, MeanMm = 0.4, MaxMm = 1.0, Points = 324, TagType = "normal"
         };
-        MarkerFit fit = MarkerSolver.Solve(layout, seen, 4000, 1800);
-        double before = a4Length(fit);
-        CheckerGridFit.Refine(layout, fit, corners, 4000, 1800);
-        double after = a4Length(fit);
-        Check(fit.GridPoints == 48, "48 ic kose kullanildi: " + fit.GridPoints);
-        Check(Math.Abs(fit.PrintScale - s) < 0.003, "baski olcegi bulundu: " + fit.PrintScale.ToString("F3"));
-        Check(Math.Abs(before - 297) > 1.5, "yalniz merkezlerle A4 hatali: " + before.ToString("F1") + " mm");
-        Check(Math.Abs(after - 297) < 0.5, "tum koselerle A4 dogru: " + after.ToString("F1") + " mm");
-        Check(Math.Abs(fit.AxisRatio - 1) < 0.01, "X/Y olcek orani 1: " + fit.AxisRatio.ToString("F3"));
+        string path = Path.Combine(Path.GetTempPath(), "kk_lens_test.txt");
+        cal.Save(path);
+        LensCalibration back = LensCalibration.Load(path);
+        File.Delete(path);
+        Check(back.Fx == 820 && back.Distortion.Length == 5 && Math.Abs(back.Distortion[4] + 0.016) < 1e-12 && back.TagType == "normal", "kaydet/oku ayni degerler");
+        Check(back.MeasuredTagCenters == null && back.MeetsReferenceTolerance, "eski kalibrasyon formati korunuyor");
+        Check(double.IsNaN(back.EdgeRmsMm), "damali kalibrasyonda kenar sapmasi yok");
+        cal.EdgeRmsMm = 2.25; cal.Save(path);
+        Check(LensCalibration.Load(path).EdgeRmsMm == 2.25, "damasiz kalibrasyonun kenar sapmasi saklaniyor");
+        cal.EdgeRmsMm = double.NaN;
+        cal.MeasuredTagCenters = new[] { new Point2(148.5, 1695), new Point2(1502, 1693), new Point2(2850, 1695),
+            new Point2(148.5, 105), new Point2(1530, 105), new Point2(2849, 106) };
+        cal.Save(path);
+        LensCalibration measured = LensCalibration.Load(path);
+        File.Delete(path);
+        Check(measured.MeasuredTagCenters.SequenceEqual(cal.MeasuredTagCenters), "olculmus dama merkezleri aynen saklaniyor");
+        cal.MeasuredTagCenters = null;
+        cal.BoardPlacements = new[] { new BoardPlacement(144.15, 1880.55, -0.483), new BoardPlacement(1647.27, 1878.62, 0.445), new BoardPlacement(3150.96, 1881.48, -0.028),
+            new BoardPlacement(148.5, 105, 0), new BoardPlacement(1698.63, 101.56, 0.456), new BoardPlacement(3153.12, 96.03, 0.055) };
+        cal.PaperCorners = new[] { new Point2(-3.5, 1986.8), new Point2(2999.5, 1798.4), new Point2(0, 0), new Point2(3001.7, 0) };
+        cal.Save(path);
+        LensCalibration placed = LensCalibration.Load(path);
+        File.Delete(path);
+        Check(placed.BoardPlacements.Select(q => (q.X, q.Y, q.RotationDeg)).SequenceEqual(cal.BoardPlacements.Select(q => (q.X, q.Y, q.RotationDeg)))
+            && placed.PaperCorners.SequenceEqual(cal.PaperCorners), "dama yerlesimi ve kagit koseleri aynen saklaniyor");
+        Check(Math.Abs(placed.PaperCornerDeviationMm() - Point2.Distance(new Point2(-3.5, 1986.8), new Point2(0, 1800))) < 1e-9, "kagit kosesi sapmasi hesaplaniyor");
+        Check(placed.CornerSource == LensCalibration.CornerSourcePaper, "kose kaynagi varsayilan olarak kagit");
+        // Mavi paspasli kalibrasyon: kose damalari gorunmez (NaN), kose kaynagi "mavi"
+        cal.BoardPlacements = Enumerable.Range(0, 6).Select(i => i == 1 || i == 4 ? new BoardPlacement(1650 + i, 100 * i, 0.1 * i) : new BoardPlacement(double.NaN, double.NaN, double.NaN)).ToArray();
+        cal.CornerSource = LensCalibration.CornerSourceMats;
+        cal.Save(path);
+        LensCalibration matCal = LensCalibration.Load(path);
+        File.Delete(path);
+        Check(matCal.CornerSource == LensCalibration.CornerSourceMats
+            && Enumerable.Range(0, 6).All(i => (i == 1 || i == 4) ? matCal.BoardPlacements[i].X == 1650 + i : double.IsNaN(matCal.BoardPlacements[i].X)),
+            "mavi paspasli kalibrasyon: kose kaynagi ve gorunmeyen damalar saklaniyor");
+        cal.CornerSource = LensCalibration.CornerSourcePaper;
+        measured.MaxMm = LensCalibration.MaxReferenceErrorMm;
+        Check(measured.MeetsReferenceTolerance, "referans hata siniri dahil");
+        measured.MaxMm = 31.21;
+        Check(!measured.MeetsReferenceTolerance, "yuksek referans hatasi guvenilir sayilmiyor");
+        measured.MaxMm = double.NaN;
+        Check(!measured.MeetsReferenceTolerance, "gecersiz referans hatasi guvenilir sayilmiyor");
+        CameraPose p = back.CameraPosition();
+        Check(Math.Abs(p.X - 1500) < 1e-6 && Math.Abs(p.Y - 900) < 1e-6 && Math.Abs(p.Height - 1300) < 1e-6, $"kamera konumu ({p.X:F1}, {p.Y:F1}, {p.Height:F1})");
     }
 
-    /// <summary>Tabla profili dosyaya yazilip geri okununca ayni kalmali; eksik dosya reddedilmeli.</summary>
-    static void TestTableProfile()
-    {
-        Console.WriteLine("Tabla profili kaydet/oku:");
-        string dir = Path.Combine(Path.GetTempPath(), "kk-profil-test-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        try
-        {
-            string path = Path.Combine(dir, "profil.txt");
-            var p = new TableProfile
-            {
-                Name = "Deneme\ntabla", TableLengthMm = 1500.5, TableWidthMm = 800, ImageWidth = 4000, ImageHeight = 1800,
-                Corners = new[] { new Point2(1450.25, 540.5), new Point2(2300, 550), new Point2(2780.125, 1690), new Point2(960, 1680.75) }
-            };
-            p.Save(path);
-            TableProfile q = TableProfile.Load(path);
-            Check(q.Name == "Deneme tabla", "ad tek satira indirildi: " + q.Name);
-            Check(q.TableLengthMm == 1500.5 && q.TableWidthMm == 800, "tabla olcusu ayni");
-            Check(q.ImageWidth == 4000 && q.ImageHeight == 1800, "goruntu boyutu ayni");
-            bool same = true;
-            for (int i = 0; i < 4; i++) same &= q.Corners[i].X == p.Corners[i].X && q.Corners[i].Y == p.Corners[i].Y;
-            Check(same, "dort kose birebir ayni ve sirasi korundu");
 
-            string broken = Path.Combine(dir, "eksik.txt");
-            File.WriteAllLines(broken, new[] { "TableLengthMm=1500", "TableWidthMm=800" });
-            bool threw = false;
-            try { TableProfile.Load(broken); } catch (FormatException) { threw = true; }
-            Check(threw, "eksik profil dosyasi FormatException verir");
-        }
-        finally
-        {
-            try { Directory.Delete(dir, true); } catch (IOException e) { Console.WriteLine("  (gecici klasor silinemedi: " + e.Message + ")"); }
-        }
-    }
-
-    /// <summary>
-    /// Iki fotografli olcumun yarim fotografi: 2 kose + 2 orta etiket (ortalar 90 derece cevrik). Etiketler karisik
-    /// sirayla gelir; dogru eslestirme bulunmali. Ortalar cevrik konmamissa (yanlis yerlesim) reddedilmeli.
-    /// </summary>
-    static void TestHalfView()
+    static void TestPlanarBundle()
     {
-        Console.WriteLine("Yarim fotograf (6 etiket):");
-        double L = 1500, W = 800, sq = 30;
-        var layout = new MarkerLayout { TableLengthMm = L, TableWidthMm = W, Kind = "dama", PatternCols = 4, PatternRows = 3, SquareMm = sq, MarkerSizeMm = 170, CutTag = true, StrictOrientation = true };
-        layout.Markers.Add(new MarkerPoint(0, 85, 70)); layout.Markers.Add(new MarkerPoint(1, 85, W - 70));
-        layout.Markers.Add(new MarkerPoint(2, L - 85, W - 70)); layout.Markers.Add(new MarkerPoint(3, L - 85, 70));
-        layout.Markers.Add(new MarkerPoint(4, 70, W / 2)); layout.Markers.Add(new MarkerPoint(5, L - 70, W / 2));
-        layout.Rotated.Add(4); layout.Rotated.Add(5);
-        // Y = 0 yarisini goren egik kamera (tabla -> goruntu)
-        var tab = new[] { new Point2(0, 0), new Point2(0, W / 2), new Point2(L, W / 2), new Point2(L, 0) };
-        var img = new[] { new Point2(1700, 300), new Point2(1850, 1000), new Point2(80, 1010), new Point2(230, 310) };
-        Homography toImg = Homography.FromPoints(tab, img);
-        Func<int, bool, Point2[]> board = (id, rotated) =>
+        Console.WriteLine("Serbest yerlesimli lens cozumu (kagitlar yanlis yerde):");
+        // 2026-11-20 15:16 kalibrasyon karesinden cikan gercekci kamera; damalar varsayilan yerden kaymis
+        double f = 1020.26, k1 = -0.28329, k2 = 0.09924, k3 = -0.02018;
+        double[] rv = { -2.96314, 0.02887, 0.02124 }, tv = { -1710.79, 1105.48, 2020.44 };
+        double[] R = Rotations.FromRvec(rv);
+        double[,] truth =
         {
-            var m = layout.Markers.First(k => k.Id == id);
-            var pts = new List<Point2>();
-            int nx = rotated ? 3 : 4, ny = rotated ? 4 : 3;
-            for (int j = 0; j < ny; j++)
-                for (int i = 0; i < nx; i++)
-                    pts.Add(toImg.Transform(new Point2(m.X + (i - (nx - 1) / 2.0) * sq, m.Y + (j - (ny - 1) / 2.0) * sq)));
-            return pts.ToArray();
+            { 144.15, 1880.55, -0.483 }, { 1647.27, 1878.62, 0.445 }, { 3150.96, 1881.48, -0.028 },
+            { 148.5, 105.0, 0.0 }, { 1698.63, 101.56, 0.456 }, { 3153.12, 96.03, 0.055 }
         };
-        int[] order = { 5, 0, 3, 4 };   // dedektorun karisik sirasi
-        Func<bool, MarkerFit> solve = midsRotated =>
+        double[,] nominal = { { 148.5, 1895 }, { 1650, 1895 }, { 3151.5, 1895 }, { 148.5, 105 }, { 1650, 105 }, { 3151.5, 105 } };
+        var local = new List<Point2>();
+        for (int j = 0; j < 6; j++) for (int i = 0; i < 9; i++) local.Add(new Point2((i - 4) * 25.0, (j - 2.5) * 25.0));
+        var rnd = new Random(7);
+        var bundle = new PlanarBundle { F = 1265.57, Cx = 960, Cy = 540, K1 = -0.4772, K2 = 0.3258, K3 = -0.1212,
+            Rvec = new[] { -2.9253, 0.0343, 0.0206 }, Tvec = new[] { -1695.1, 1113.2, 2485.4 } };
+        for (int b = 0; b < 6; b++)
         {
-            var centers = new List<Point2>(); var corners = new List<Point2[]>();
-            foreach (int id in order)
+            var place = new BoardPlacement(truth[b, 0], truth[b, 1], truth[b, 2]);
+            var px = local.Select(l =>
             {
-                var m = layout.Markers.First(k => k.Id == id);
-                centers.Add(toImg.Transform(new Point2(m.X, m.Y)));
-                corners.Add(board(id, id >= 4 && midsRotated));
-            }
-            return HalfViewSolver.Solve(layout, new[] { 0, 4, 5, 3 }, centers, corners, 1920, 1080, -1);
-        };
-        MarkerFit fit = solve(true);
-        bool ok = fit.Calibration != null;
-        Check(ok && fit.Used.OrderBy(i => i).SequenceEqual(new[] { 0, 3, 4, 5 }), "dort etiket eslesti: " + (ok ? string.Join(",", fit.Used) : fit.Error));
-        if (ok)
-        {
-            Homography h = fit.Calibration.ImageToTable;
-            Point2 p = h.Transform(toImg.Transform(new Point2(700, 250)));
-            Check(Point2.Distance(p, new Point2(700, 250)) < 0.5, "tabla noktasi dogru yerde: " + p);
-            Check(fit.RmsMm < 0.1 && fit.GridPoints == 48, "48 ic kose, izgara hatasi " + fit.RmsMm.ToString("F3") + " mm");
+                Point2 q = place.Apply(l);
+                Point2 p = PlanarBundle.Project(f, 960, 540, k1, k2, k3, R, tv, q.X, q.Y);
+                return new Point2(p.X + (rnd.NextDouble() - 0.5) * 0.3, p.Y + (rnd.NextDouble() - 0.5) * 0.3);
+            }).ToArray();
+            bundle.Boards.Add(new PlanarBundle.Board { Local = local.ToArray(), Pixels = px, X = nominal[b, 0], Y = nominal[b, 1], Theta = 0, Fixed = b == 3 });
         }
-        Check(solve(false).Calibration == null, "orta etiketler cevrik degilse reddedildi");
+        bool ok = bundle.Solve();
+        Check(ok && bundle.RmsPx < 0.2, $"yeniden izdusum hatasi gurultu duzeyinde: {bundle.RmsPx:F3} px");
+        Check(Math.Abs(bundle.F - f) / f < 0.01, $"odak uzakligi geri bulundu: {bundle.F:F1} (gercek {f:F1})");
+        double worst = Enumerable.Range(0, 6).Max(b => Point2.Distance(new Point2(bundle.Boards[b].X, bundle.Boards[b].Y), new Point2(truth[b, 0], truth[b, 1])));
+        Check(worst < 0.5, $"kaymis damalarin yeri geri bulundu (en buyuk fark {worst:F2} mm; orta alt dama 48,6 mm kaymisti)");
+        double worstAngle = Enumerable.Range(0, 6).Max(b => Math.Abs(bundle.Boards[b].Theta * 180 / Math.PI - truth[b, 2]));
+        Check(worstAngle < 0.05, $"dama acilari geri bulundu (en buyuk fark {worstAngle:F3} derece)");
+
+        // Cerceve degisimi: ayni fiziksel nokta ayni piksele dusmeli
+        double[] r0 = Rotations.FromRvec(bundle.Rvec), t0 = (double[])bundle.Tvec.Clone();
+        Point2 before = PlanarBundle.Project(bundle.F, 960, 540, bundle.K1, bundle.K2, bundle.K3, r0, t0, 1234, 567);
+        double phi = 0.0123; var shift = new Point2(-12.3, 45.6);
+        bundle.Reframe(phi, shift);
+        double c = Math.Cos(phi), s = Math.Sin(phi);
+        Point2 moved = new Point2(c * 1234 - s * 567 + shift.X, s * 1234 + c * 567 + shift.Y);
+        Point2 after = PlanarBundle.Project(bundle.F, 960, 540, bundle.K1, bundle.K2, bundle.K3, Rotations.FromRvec(bundle.Rvec), bundle.Tvec, moved.X, moved.Y);
+        Check(Point2.Distance(before, after) < 1e-6, $"cerceve degisimi ayni pikseli veriyor ({Point2.Distance(before, after):E1} px)");
+        double[] back = Rotations.ToRvec(Rotations.FromRvec(rv));
+        Check(Math.Abs(back[0] - rv[0]) + Math.Abs(back[1] - rv[1]) + Math.Abs(back[2] - rv[2]) < 1e-9, "Rodrigues gidis-donus ayni (166 derece)");
+
+        // Geri izdusum izdusumun tersi (genis acili lens, tablanin kosesine yakin nokta)
+        Point2 img = PlanarBundle.Project(f, 960, 540, k1, k2, k3, R, tv, 3250, 1950);
+        Point2 onTable = PlanarBundle.BackProject(f, 960, 540, k1, k2, k3, R, tv, img);
+        Check(Point2.Distance(onTable, new Point2(3250, 1950)) < 1e-6, $"geri izdusum izdusumun tersi ({Point2.Distance(onTable, new Point2(3250, 1950)):E1} mm)");
+        // Dogru oturtma ve kesisim
+        double[] dev = PlanarBundle.FitLine(new[] { new Point2(0, 1), new Point2(10, 1.2), new Point2(20, 1.4), new Point2(30, 1.6) }, out Point2 nA, out double dA);
+        PlanarBundle.FitLine(new[] { new Point2(5, -10), new Point2(5, 0), new Point2(5, 10) }, out Point2 nB, out double dB);
+        Point2 cross = PlanarBundle.Intersect(nA, dA, nB, dB);
+        Check(dev.All(v => Math.Abs(v) < 1e-9) && Point2.Distance(cross, new Point2(5, 1.1)) < 1e-9, "dogru oturtma ve kesisim");
+
+        // Lens sabit (mavi paspasli kalibrasyon): yalniz iki orta dama gorunur, lens bilinir; kamera konumu ve damalarin yeri cozulur
+        var fixedLens = new PlanarBundle { F = f, Cx = 960, Cy = 540, K1 = k1, K2 = k2, K3 = k3, FixIntrinsics = true,
+            Rvec = new[] { -2.95, 0.035, 0.03 }, Tvec = new[] { -1690.0, 1090.0, 2050.0 } };
+        foreach (int b in new[] { 1, 4 })
+        {
+            var place = new BoardPlacement(truth[b, 0], truth[b, 1], truth[b, 2]);
+            var px = local.Select(l => { Point2 q = place.Apply(l); return PlanarBundle.Project(f, 960, 540, k1, k2, k3, R, tv, q.X, q.Y); }).ToArray();
+            fixedLens.Boards.Add(new PlanarBundle.Board { Local = local.ToArray(), Pixels = px, X = b == 4 ? truth[b, 0] : nominal[b, 0], Y = b == 4 ? truth[b, 1] : nominal[b, 1], Theta = b == 4 ? truth[b, 2] * Math.PI / 180 : 0, Fixed = b == 4 });
+        }
+        bool okFixed = fixedLens.Solve();
+        Check(okFixed && fixedLens.F == f && fixedLens.K1 == k1 && fixedLens.K2 == k2 && fixedLens.K3 == k3, "sabit lens cozumde degismiyor");
+        double camErr = Point2.Distance(PlanarBundle.Project(f, 960, 540, k1, k2, k3, Rotations.FromRvec(fixedLens.Rvec), fixedLens.Tvec, 3200, 1950),
+            PlanarBundle.Project(f, 960, 540, k1, k2, k3, R, tv, 3200, 1950));
+        Check(okFixed && fixedLens.RmsPx < 0.01 && camErr < 0.05, $"sabit lensle kamera konumu iki damadan bulundu (kosede {camErr:F3} px)");
+
+        PlanarBundle.RigidFit(new[] { new Point2(0, 0), new Point2(10, 0), new Point2(0, 5) },
+            new[] { new Point2(3, 4), new Point2(3, 14), new Point2(-2, 4) }, out double fitPhi, out Point2 fitShift);
+        Check(Math.Abs(fitPhi - Math.PI / 2) < 1e-9 && Point2.Distance(fitShift, new Point2(3, 4)) < 1e-9, "rijit oturtma");
     }
 
     static int Main()
     {
         TestHomography();
-        TestCheckerGrid();
-        TestHalfView();
-        TestTableProfile();
+        TestLensCalibrationFile();
+        TestPlanarBundle();
         TestCameraPose();
         TestShapes();
         TestThickness();

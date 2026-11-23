@@ -7,10 +7,9 @@ using OpenCvSharp;
 namespace KopruKesim.Vision
 {
     /// <summary>
-    /// Tablanin dort kosesine konan dama tahtasi desenlerini bulur. Desenler birbirinin aynisi oldugu
-    /// icin hangisinin hangi kose oldugu fotograftaki yerinden cikarilir: sol ust = 0 noktasi (numara 0),
-    /// sag ust = 1, sag alt = 2, sol alt = 3 (kalibrasyon kose sirasiyla ayni). Her desenin merkezi,
-    /// ic koselere oturtulan izgaranin orta noktasidir (piksel alti hassas, perspektif hesaba katilir).
+    /// Fotograftaki dama tahtasi desenlerini (kalibrasyon etiketleri) bulur. Her desenin merkezi, ic koselere
+    /// oturtulan izgaranin orta noktasidir (piksel alti hassas, perspektif hesaba katilir). Hangi desenin tablanin
+    /// neresinde oldugunu LensCalibrator fotograftaki yerlerinden eslestirir.
     ///
     /// Arama iki adimlidir. Tum fotografta tek seferde aramak guvenilir degil: uzaktaki etiket egik
     /// bakista cok basik gorunur (kare yuksekligi ~10 piksel), yanlis oturur ya da hic bulunmaz.
@@ -35,15 +34,7 @@ namespace KopruKesim.Vision
             public Rect Box;
         }
 
-        /// <summary>Fotograftaki desen merkezleri, kose numarasina gore (0-3). Dort desen bulunamazsa eksik doner (numaralar 100+).</summary>
-        public static Dictionary<int, Point2> Find(Mat frame, int innerCols, int innerRows, int maxBoards = 4)
-        {
-            Dictionary<int, Point2[]> corners;
-            return Find(frame, innerCols, innerRows, out corners, maxBoards);
-        }
-
-        /// <param name="corners">Her desenin ic koseleri (tam cozunurluk, piksel), ayni numarayla.</param>
-        /// <summary>Fotograftaki butun desenler (numarasiz): merkez ve ic koseler. Iki fotografli olcumde kullanilir.</summary>
+        /// <summary>Fotograftaki butun desenler (numarasiz): merkez ve ic koseler. Kamera kalibrasyonu kullanir.</summary>
         public static List<KeyValuePair<Point2, Point2[]>> FindAll(Mat frame, int innerCols, int innerRows)
         {
             using (var gray = new Mat())
@@ -51,35 +42,6 @@ namespace KopruKesim.Vision
                 if (frame.Channels() == 1) frame.CopyTo(gray); else Cv2.CvtColor(frame, gray, ColorConversionCodes.BGR2GRAY);
                 return FindBoards(gray, innerCols, innerRows).Select(b => new KeyValuePair<Point2, Point2[]>(b.Center, b.Corners)).ToList();
             }
-        }
-
-        public static Dictionary<int, Point2> Find(Mat frame, int innerCols, int innerRows, out Dictionary<int, Point2[]> corners, int maxBoards = 4)
-        {
-            corners = new Dictionary<int, Point2[]>();
-            List<Board> boards;
-            using (var gray = new Mat())
-            {
-                if (frame.Channels() == 1) frame.CopyTo(gray); else Cv2.CvtColor(frame, gray, ColorConversionCodes.BGR2GRAY);
-                boards = FindBoards(gray, innerCols, innerRows);
-            }
-            if (boards.Count > maxBoards) boards = boards.OrderBy(b => b.Residual).Take(maxBoards).ToList();
-
-            var result = new Dictionary<int, Point2>();
-            if (boards.Count == 4)
-            {
-                Point2[] ordered = TableFinder.OrderByImagePosition(boards.Select(b => b.Center).ToArray());
-                for (int i = 0; i < 4; i++)
-                {
-                    result[i] = ordered[i];
-                    corners[i] = boards.First(b => b.Center.X == ordered[i].X && b.Center.Y == ordered[i].Y).Corners;
-                }
-            }
-            else
-            {
-                // Dortten az: yerini kesin bilemeyiz; bulunanlari yine sirayla dondur (cozucu "yetersiz" der)
-                for (int i = 0; i < boards.Count; i++) result[100 + i] = boards[i].Center;
-            }
-            return result;
         }
 
         private static List<Board> FindBoards(Mat gray, int cols, int rows)

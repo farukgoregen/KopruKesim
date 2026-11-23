@@ -6,6 +6,18 @@
       "runtimeExecutable": "dotnet",
       "runtimeArgs": ["run", "--project", "src/KopruKesim.Web", "--urls", "http://localhost:5080"],
       "port": 5080
+    },
+    {
+      "name": "kopru-kesim-test",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["C:/Users/faruk/AppData/Local/Temp/claude/5428121e9fc12be2/aeda6be3-586e-4b6f-87db-99b0ab72ced8/scratchpad/webbuild/KopruKesim.Web.dll", "--contentRoot", "C:/Users/faruk/AppData/Local/Temp/claude/5428121e9fc12be2/aeda6be3-586e-4b6f-87db-99b0ab72ced8/scratchpad/webroot", "--urls", "http://localhost:5091"],
+      "port": 5091
+    },
+    {
+      "name": "jarvis-main",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "C:/Users/faruk/OneDrive/Desktop/jarvis-main/server", "start"],
+      "port": 8787
     }
   ]
 }
