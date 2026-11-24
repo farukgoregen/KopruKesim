@@ -920,6 +920,19 @@ namespace KopruKesim.Vision
                     bool final = ok.Length * 2 >= fe.Points.Length && fe.Straight;
                     if (refine[e] && (final || (pass < 3 && spread))) { edges[e] = fe; if (final) used++; }
                     else edges[e] = plain.Edges[e];
+                    if (Environment.GetEnvironmentVariable("KK_DEBUG") == "1")
+                    {
+                        // Iz: her noktanin kaba cizgiden kaymasi (mm, + disari), oturdu mu (o), dogruya uydu mu (aykiri x)
+                        Point2 d0 = pts[e][pts[e].Count - 1] - pts[e][0];
+                        var nrm = new Point2(d0.Y, -d0.X) * (1 / Math.Max(1e-9, d0.Length));
+                        Point2 ctr = new Point2(cur.Average(c => c.X), cur.Average(c => c.Y));
+                        if (Point2.Dot(nrm, pts[e][0] - ctr) < 0) nrm = nrm * -1;
+                        double mmPerPx = Point2.Distance(_cal.ImageToTable.Transform(pts[e][0]), _cal.ImageToTable.Transform(pts[e][0] + nrm));
+                        string marks = string.Join(" ", Enumerable.Range(0, fe.Points.Length).Select(i => !fe.Snapped[i] ? "-"
+                            : (Point2.Dot(fe.Points[i] - pts[e][i], nrm) * mmPerPx).ToString("+0.0;-0.0", System.Globalization.CultureInfo.InvariantCulture) + (fe.Inlier[i] ? "" : "x")));
+                        Console.WriteLine("    [oturtma tur {0} kenar {1}] oturan {2}/{3} duz {4} -> {5}: {6}", pass, e, ok.Length, fe.Points.Length,
+                            fe.Straight ? "evet" : "hayir", ReferenceEquals(edges[e], fe) ? (final ? "kesin" : "gecici") : "kaba", marks);
+                    }
                 }
                 var next = new Point2[4];
                 for (int i = 0; i < 4; i++)
