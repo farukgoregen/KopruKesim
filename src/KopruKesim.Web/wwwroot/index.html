@@ -464,6 +464,8 @@
       <button class="sekme" role="tab" id="sekmeKalibrasyon" aria-selected="false" hidden>Kalibrasyon</button>
       <button class="sekme" role="tab" id="sekmeDamasizKal" aria-selected="false" hidden>Damasız kalibrasyon</button>
       <button class="sekme" role="tab" id="sekmeOlcum" aria-selected="false" disabled>Üstten ölçüm</button>
+      <button type="button" id="tumOlcuDugme" aria-pressed="false" hidden
+        style="margin-left:auto;align-self:center;padding:5px 12px;font-size:13px;cursor:pointer">Tüm ölçüler (O)</button>
     </div>
     <div class="tuval" id="tuval"></div>
     <p class="ipucu" id="ipucu"></p>
@@ -848,11 +850,9 @@
   function sonucYaz() {
     const kutu = $("sonuc"); kutu.replaceChildren();
     if (!sonOlcum) return;
-    const tb = document.createElement("button");
-    tb.id = "tumOlcuDugme"; tb.type = "button"; tb.setAttribute("aria-pressed", tumOlculer);
-    tb.textContent = "Tüm ölçüler (O)"; tb.style.cssText = "margin:0 0 10px;padding:4px 10px;font-size:12px;cursor:pointer";
-    tb.addEventListener("click", tumOlculeriDegistir);
-    kutu.append(tb);
+    const tb = $("tumOlcuDugme");
+    tb.hidden = false; tb.setAttribute("aria-pressed", tumOlculer);
+    tb.onclick = tumOlculeriDegistir;
     if (sonOlcum.uyarilar && sonOlcum.uyarilar.length) {
       const u = document.createElement("div"); u.className = "uyari";
       u.innerHTML = "<h3>Ölçüm sapabilir</h3>" + sonOlcum.uyarilar.map(m => `<p>${m}</p>`).join("");
