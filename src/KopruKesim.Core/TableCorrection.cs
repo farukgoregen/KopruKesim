@@ -29,7 +29,7 @@ namespace KopruKesim.Core
 
         public TableCorrection(Point2[] measured, Point2[] trueCorners, Point2 center, double e)
         {
-            // Ilk dort nokta tabla koseleri (sol ust, sag ust, sol alt, sag alt); 6 paspasli kalibrasyonda ardindan orta
+            // Ilk dort nokta tabla koseleri (sol ust, sag ust, sol alt, sag alt); fazla noktada ardindan orta
             // paspaslarin tabla kenarindaki dis koseleri gelir. Dortten fazla noktada homografi en kucuk karelerle.
             if (measured == null || measured.Length < 4 || trueCorners == null || trueCorners.Length != measured.Length)
                 throw new ArgumentException("En az dort nokta gerekli.");

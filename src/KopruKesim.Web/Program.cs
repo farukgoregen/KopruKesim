@@ -345,8 +345,7 @@ app.MapPost("/api/kalibrasyon", async (HttpRequest req) =>
     double Num(string key) => double.TryParse(form[key].ToString().Replace(',', '.'), NumberStyles.Float, inv, out double v) && double.IsFinite(v) ? v : double.NaN;
     // Yalniz dort mavi paspasla kalibrasyon (dama yok): tablanin dort kenari ayri ayri girilir
     if (form.ContainsKey("alt")) return CalibrateWithMats(bytes, new TableSides { Bottom = Num("alt"), Top = Num("ust"), Left = Num("sol"), Right = Num("sag"), Diagonal = Num("kosegen") },
-        new MatSpec { LongMm = Num("paspasUzun"), ShortMm = Num("paspasKisa"), ThicknessMm = Num("paspasKalinlik") },
-        new MidMats { BottomX = Num("ortaAlt"), TopX = Num("ortaUst") });   // 6 paspas: alt / ust kenar ortasindaki paspaslar
+        new MatSpec { LongMm = Num("paspasUzun"), ShortMm = Num("paspasKisa"), ThicknessMm = Num("paspasKalinlik") });
     double length = double.TryParse(form["uzunluk"], NumberStyles.Float, inv, out double l) && l > 0 ? l : 0;
     double width = double.TryParse(form["genislik"], NumberStyles.Float, inv, out double w) && w > 0 ? w : 0;
     if (!double.IsFinite(length) || !double.IsFinite(width) || length <= 0 || width <= 0)
@@ -480,7 +479,7 @@ void SaveCalibrationTopView(Mat frame, LensCalibration cal)
 
 // Paspasli kalibrasyon: dort mavi paspas tablanin koselerinde (dis kosesi tabla kosesi), tabla kenarlari seritle olculmus.
 // Lens kameranin kayitli lens bilgisinden (son 6 damali kalibrasyon) alinir; fotograftan kameranin konumu cozulur.
-IResult CalibrateWithMats(byte[] bytes, TableSides sides, MatSpec spec, MidMats mids = null)
+IResult CalibrateWithMats(byte[] bytes, TableSides sides, MatSpec spec)
 {
     foreach (var (v, name) in new[] { (sides.Bottom, "alt"), (sides.Top, "üst"), (sides.Left, "sol"), (sides.Right, "sağ") })
         if (double.IsNaN(v) || v < 500 || v > 10000) return Fail($"Tablanın {name} kenarını mm olarak girin (paspasların dış köşeleri arası).");
@@ -510,9 +509,7 @@ IResult CalibrateWithMats(byte[] bytes, TableSides sides, MatSpec spec, MidMats 
             // Kamera konumu bu kalibrasyondan alinir: dogrulugu da ondan
             MeanMm = (Fits(current) ? current : source).MeanMm, MaxMm = (Fits(current) ? current : source).MaxMm, Points = (Fits(current) ? current : source).Points
         };
-        if (mids != null && mids.Any && (double.IsNaN(mids.BottomX) || double.IsNaN(mids.TopX)))
-            return Fail("6 paspaslı kalibrasyonda alt ve üst orta paspasın uzaklığını da girin.");
-        MatCalibrator.Result r = MatCalibrator.Calibrate(frame, sides, spec, prior, mids);
+        MatCalibrator.Result r = MatCalibrator.Calibrate(frame, sides, spec, prior);
         if (r.Calibration == null) return Fail(r.Error + " Fotoğraf incelenmek üzere kaydedildi (kalibrasyon\\son-deneme.jpg).");
         LensCalibration cal = r.Calibration;
         cal.Save(lensPath);
@@ -537,9 +534,6 @@ IResult CalibrateWithMats(byte[] bytes, TableSides sides, MatSpec spec, MidMats 
                 + "Hatası büyük paspasın tabla köşesine tam oturduğunu, paspas ölçüsünü ve tabla kenar uzunluklarını kontrol edin.");
         if (double.IsFinite(saved.EdgeRmsMm) && saved.EdgeRmsMm > 2.5)
             uyarilar.Add($"Mavi paspasların kenarları düz görünmüyor (sapma {saved.EdgeRmsMm:F1} mm). Paspaslar tablaya düz yatmalı ve kıvrık olmamalı.");
-        if (r.MidErrorMm != null)
-            uyarilar.Add($"6 paspas: orta paspasların dış köşeleri yalnız köşe düzeltmesiyle {string.Join(" / ", r.MidRawErrorMm.Select(e => e.ToString("F1")))} mm sapıyordu, "
-                + $"kalan bükülme bulunduktan sonra {string.Join(" / ", r.MidErrorMm.Select(e => e.ToString("F1")))} mm (alt sol, alt sağ, üst sol, üst sağ).");
         uyarilar.Add("Kalibrasyon kaydedildi. Şimdi boş tablayı (paspaslar yerinde, başka bir şey yokken) bir kez kaydedin.");
         return Results.Json(new { kalibrasyon = LensStatus(saved), paspasHatasiMm = r.MatErrorMm.Select(e => Math.Round(e, 2)), uyarilar });
     }

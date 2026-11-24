@@ -387,17 +387,6 @@ static class Program
         var plain = new TableCorrection(truth, truth, mid, 0);
         Check(Near(plain.Apply(q), q, 1e-9) && Near(plain.Invert(q), q, 1e-9), "kayma yoksa nokta degismez");
 
-        // 6 paspas: kalan bukulme bilinmiyor; alt ve ust kenarin ortasindaki paspaslarin dis koselerinden bulunur
-        Point2[] mids = { new Point2(1430, 0), new Point2(1865, 0), new Point2(1432, 1989.6), new Point2(1867, 1989.4) };
-        Point2[] all = truth.Concat(mids).ToArray();
-        var fit = TableCorrection.Fit(all.Select(warp).ToArray(), all, warp(mid), out double rms);
-        double maxFit = 0;
-        for (int i = 0; i <= 10; i++)
-            for (int j = 0; j <= 10; j++) { Point2 p = new Point2(3296 * i / 10.0, 1990 * j / 10.0); maxFit = Math.Max(maxFit, Point2.Distance(fit.Apply(warp(p)), p)); }
-        Console.WriteLine("    6 paspas: bulunan kalan bukulme {0:E2}, nokta rms {1:F2} mm, tablada en buyuk hata {2:F2} mm (yalniz koselerle {3:F1})", fit.E, rms, maxFit, maxCorners);
-        Check(maxFit < 3 && fit.E > 0, "6 paspas: kenar ortalari kalan bukulmeyi belirler");
-        var re6 = TableCorrection.FromValues(fit.ToValues());
-        Check(re6.Measured.Length == 8 && Near(re6.Apply(warp(q0)), fit.Apply(warp(q0)), 1e-9), "6 paspas: kayit / okuma");
     }
 
     static int Main()

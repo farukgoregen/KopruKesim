@@ -285,9 +285,9 @@
       </div>
       <p class="ipucu-kucuk" id="bosDurum"></p>
       <p class="ipucu-kucuk" id="kalDurum">Kalibrasyon yok.</p>
-      <details id="kalDetay">
-        <summary>Kamera kalibrasyonu (yalnız kamera oynarsa ya da odak değişirse)</summary>
-        <p class="ipucu-kucuk">Dört mavi paspası tablanın köşelerine koyun: dış köşesi tabla köşesine tam dayalı, uzun kenarı tablanın uzun kenarı boyunca. Tabla boşken kalibrasyon fotoğrafını çekin, sonra paspasları kaldırıp boş tablayı kaydedin. Lens bükülmesi kameranın kayıtlı lens bilgisinden alınır.</p>
+      <div id="kalDetay" style="margin-top: 14px">
+        <h3 style="margin: 0 0 4px">Paspaslı kalibrasyon (4 paspas)</h3>
+        <p class="ipucu-kucuk">Yalnız ilk kurulumda ya da kamera oynarsa gerekir. Dört mavi paspası tablanın köşelerine koyun: dış köşesi tabla köşesine tam dayalı, uzun kenarı tablanın uzun kenarı boyunca. Tabla boşken kalibrasyon fotoğrafını çekin, sonra paspasları kaldırıp boş tablayı kaydedin. Lens bükülmesi kameranın kayıtlı lens bilgisinden alınır.</p>
         <div class="satir">
           <label class="alan">Paspas uzun (mm)<input id="kalPaspasUzun" type="number" min="50" step="1" value="435" inputmode="decimal"></label>
           <label class="alan">Paspas kısa (mm)<input id="kalPaspasKisa" type="number" min="30" step="1" value="150" inputmode="decimal"></label>
@@ -297,7 +297,7 @@
           <button type="button" class="dugme ikincil" id="kalYukle">Kalibrasyon fotoğrafı yükle</button>
           <button type="button" class="dugme ikincil" id="kalKamera" hidden>IP kameradan kalibre et</button>
         </div>
-      </details>
+      </div>
     </div>
 
     <div class="grup" id="ipKameraGrup">
@@ -470,7 +470,7 @@
     const b1 = document.createElement("button");
     b1.className = "dugme";
     b1.textContent = cameraCalibrated ? "Fotoğraf yükle" : "Kalibrasyon fotoğrafı yükle";
-    b1.onclick = () => { if (!cameraCalibrated) $("kalDetay").open = true; $(cameraCalibrated ? "olcDugme" : "kalYukle").click(); };
+    b1.onclick = () => { $(cameraCalibrated ? "olcDugme" : "kalYukle").click(); };
     dd.append(b1); k.append(dd);
     return k;
   }
