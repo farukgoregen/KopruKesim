@@ -250,6 +250,14 @@ object LensStatus(LensCalibration c) => c == null ? new { var = false } as objec
     kamera = new { x = Math.Round(c.CameraPosition().X), y = Math.Round(c.CameraPosition().Y), z = Math.Round(c.CameraPosition().Height) }
 };
 
+// Duz ustten gorunum icin sentetik "kamera": tabla duzlemine tam yukaridan bakan, bukulmesiz, 1 piksel = 1 mm
+LensCalibration FlatTopCalibration(double lengthMm, double widthMm) => new LensCalibration
+{
+    TableLengthMm = lengthMm, TableWidthMm = widthMm, ImageWidth = (int)lengthMm, ImageHeight = (int)widthMm,
+    Fx = 5000, Fy = 5000, Cx = 0, Cy = 0, Distortion = new double[5],
+    Rvec = new[] { Math.PI, 0, 0 }, Tvec = new[] { 0, widthMm, 5000.0 }, TagType = "duz"
+};
+
 // Kalibrasyonlu olcum: bos tabla fotografi varsa karsilastirmayla
 MeasureOutput RunLens(Mat frame, LensCalibration c, MarkerLayout tags, DetectorOptions options, double thickness, string emptyFile = null)
 {
@@ -778,7 +786,23 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             RefineEdges = form["parcaIncelt"] != "0"   // parca kenarlarini fotografta cok noktayla oturt (karsilastirma icin kapatilabilir)
         };
         string method = cornerMode ? "damasiz-kalibrasyon" : "kalibrasyon";
-        using MeasureOutput result = RunLens(frame, lensCal, layout, options, thickness, cornerMode ? cornerEmptyPath : emptyPath);
+        // Daha once kaydedilen duzeltilmis goruntu (3300 x 2000, 1 px = 1 mm, plakanin ust yuzeyi yuksekliginde) yeniden
+        // yuklendiyse: zaten duz ustten gorunum, lens duzeltmesi yapilmaz. Bos tabla ayni sekilde duzeltilip referans olur.
+        bool flat = !cornerMode && frame.Cols == (int)DisplayLengthMm && frame.Rows == (int)DisplayWidthMm
+            && (lensCal.ImageWidth != frame.Cols || lensCal.ImageHeight != frame.Rows);
+        LensCalibration geomCal = lensCal;
+        MeasureOutput result;
+        if (flat)
+        {
+            geomCal = FlatTopCalibration(DisplayLengthMm, DisplayWidthMm);
+            formLength = DisplayLengthMm; formWidth = DisplayWidthMm;
+            using Mat emptyRaw = File.Exists(emptyPath) ? Cv2.ImRead(emptyPath) : null;
+            using Mat emptyFlat = emptyRaw != null && !emptyRaw.Empty() && emptyRaw.Cols == lensCal.ImageWidth && emptyRaw.Rows == lensCal.ImageHeight
+                ? LensCalibrator.TopViewAt(emptyRaw, lensCal, DisplayLengthMm, DisplayWidthMm, 1.0, thickness) : null;
+            result = TableMeasure.RunWithLens(frame, geomCal, null, options, 0, emptyFlat);
+        }
+        else result = RunLens(frame, lensCal, layout, options, thickness, cornerMode ? cornerEmptyPath : emptyPath);
+        using var resultHolder = result;
         if (result.Error != null)
         {
             SaveMeasurement(bytes, null, thickness, formLength, formWidth, result, new List<string>(), method);   // basarisiz olcum de incelensin
@@ -795,7 +819,8 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
                 : "Boş tabla fotoğrafı kayıtlı değil: tablanın üzerindeki lekeler, çizikler ya da çıta araları parça sanılabilir. Damaları kaldırdıktan sonra Kamera kalibrasyonu bölümünden boş tablayı bir kez kaydedin.");
         // Gosterim ve kayit goruntusu: 1 piksel = 1 mm, DisplayLengthMm x DisplayWidthMm, plakanin ust yuzeyi
         // yuksekliginde duzeltilir; boylece kalinlik ne olursa olsun cizilen koseler plakanin gorunen kenarinda durur.
-        using Mat display = LensCalibrator.TopViewAt(frame, lensCal, DisplayLengthMm, DisplayWidthMm, 1.0, thickness);
+        if (flat) uyarilar.Add("Düzeltilmiş (3300 × 2000) görüntü ölçüldü: lens ve kalınlık düzeltmesi görüntüde zaten uygulanmış, yeniden uygulanmadı. Ham kamera fotoğrafı ölçmek daha doğrudur.");
+        using Mat display = flat ? frame.Clone() : LensCalibrator.TopViewAt(frame, lensCal, DisplayLengthMm, DisplayWidthMm, 1.0, thickness);
         byte[] displayJpg = display.ToBytes(".jpg", new ImageEncodingParam(ImwriteFlags.JpegQuality, 90));
         string logId = SaveMeasurement(bytes, displayJpg, thickness, formLength, formWidth, result, uyarilar, method, calibrationTrusted);
         TableCalibration used = result.Calibration;
@@ -806,10 +831,10 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             kalinlik = thickness,
             // Olcum ustten gorunumde yapilir; arayuz fotografi cizdigi icin boyut ve koseler fotograftaki
             goruntuBoyutu = new { w = frame.Cols, h = frame.Rows },
-            tablaKoseleri = LensCalibrator.TableToImage(lensCal, new[] { new Point2(0, 0), new Point2(0, formWidth), new Point2(formLength, formWidth), new Point2(formLength, 0) }).Select(P),
+            tablaKoseleri = LensCalibrator.TableToImage(geomCal, new[] { new Point2(0, 0), new Point2(0, formWidth), new Point2(formLength, formWidth), new Point2(formLength, 0) }).Select(P),
             kalibrasyon = cornerMode ? CornerStatus(lensCal) : LensStatus(lensCal),
             // Tablanin kenari fotografta lens bukulmesiyle egri gorunur: kenar boyunca noktalar (arayuz cizer)
-            tablaKenari = LensCalibrator.TableToImage(lensCal, TableBorder(formLength, formWidth, 40)).Select(P),
+            tablaKenari = LensCalibrator.TableToImage(geomCal, TableBorder(formLength, formWidth, 40)).Select(P),
             uyarilar,
             koseKaynagi = cornerMode ? "kalibrasyon-damasiz" : "kalibrasyon",
             kayit = logId,

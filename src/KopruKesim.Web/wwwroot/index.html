@@ -495,6 +495,7 @@
   const sayi = (v, hane = 0) => v.toLocaleString("tr-TR", { minimumFractionDigits: hane, maximumFractionDigits: hane, useGrouping: false });
   const SEKIL = { Dikdortgen: "dikdörtgen", Kare: "kare", Ucgen: "üçgen", Dortgen: "dörtgen", Cokgen: "çokgen" };
 
+  let tumOlculer = false, tumGrup = null;   // "Tum olculer" gorunumu
   let sonOlcum = null;      // son olcum yaniti
   let sonFoto = null;       // son olculen fotograf (kalinlik degisince yeniden olcmek icin)
   let gorunum = "acilis";
@@ -759,6 +760,10 @@
     const edgeLabel = el("g", { class: "olcu", "aria-hidden": "true" });
     edgeLabel.style.display = "none";
     let selectedEdge = null;
+    // Tum kenar olculeri: "Tüm ölçüler" dugmesi ya da O tusu ile acilip kapanir
+    const allLabels = el("g", { class: "olcu", "aria-hidden": "true" });
+    allLabels.style.display = tumOlculer ? "" : "none";
+    tumGrup = allLabels;
 
     sonOlcum.parcalar.forEach((p, pi) => {
       const k = p.koseler, n = k.length;
@@ -778,19 +783,23 @@
         const edge = el("line", { class: "kenar-hedef", x1: a[0], y1: Y(a[1]), x2: c[0], y2: Y(c[1]),
           role: "button", tabindex: 0, "aria-pressed": "false",
           "aria-label": `Parça ${pi + 1}, köşe ${i + 1}–${(i + 1) % n + 1}: ${label}` });
-        const select = () => {
-          selectedEdge?.setAttribute("aria-pressed", "false");
-          selectedEdge = edge;
-          edge.setAttribute("aria-pressed", "true");
+        const labelParts = () => {
           const midX = (a[0] + c[0]) / 2, midY = (a[1] + c[1]) / 2;
           const dx = mx - midX, dy = my - midY, distance = Math.hypot(dx, dy) || 1;
           const x = midX + dx / distance * b * 2.6, y = Y(midY + dy / distance * b * 2.6);
           const width = label.length * b * 1.3 + b;
-          edgeLabel.replaceChildren(
+          return [
             el("line", { class: "kenar-vurgu", x1: a[0], y1: Y(a[1]), x2: c[0], y2: Y(c[1]) }),
             el("rect", { x: x - width / 2, y: y - b * 1.5, width, height: b * 3, rx: b * 0.3 }),
             el("text", { x, y: y + b * 0.78, "text-anchor": "middle", "font-size": b * 2.2 }, label)
-          );
+          ];
+        };
+        allLabels.append(...labelParts());
+        const select = () => {
+          selectedEdge?.setAttribute("aria-pressed", "false");
+          selectedEdge = edge;
+          edge.setAttribute("aria-pressed", "true");
+          edgeLabel.replaceChildren(...labelParts());
           edgeLabel.style.display = "";
         };
         edge.addEventListener("click", event => {
@@ -822,13 +831,28 @@
         g.append(t); svg.append(g);
       });
     });
-    svg.append(edgeTargets, edgeLabel);
+    svg.append(edgeTargets, allLabels, edgeLabel);
     return svg;
   }
+
+  function tumOlculeriDegistir() {
+    tumOlculer = !tumOlculer;
+    if (tumGrup) tumGrup.style.display = tumOlculer ? "" : "none";
+    const d = document.getElementById("tumOlcuDugme");
+    if (d) d.setAttribute("aria-pressed", tumOlculer);
+  }
+  document.addEventListener("keydown", e => {
+    if ((e.key === "o" || e.key === "O") && !e.ctrlKey && !e.altKey && !e.metaKey && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) tumOlculeriDegistir();
+  });
 
   function sonucYaz() {
     const kutu = $("sonuc"); kutu.replaceChildren();
     if (!sonOlcum) return;
+    const tb = document.createElement("button");
+    tb.id = "tumOlcuDugme"; tb.type = "button"; tb.setAttribute("aria-pressed", tumOlculer);
+    tb.textContent = "Tüm ölçüler (O)"; tb.style.cssText = "margin:0 0 10px;padding:4px 10px;font-size:12px;cursor:pointer";
+    tb.addEventListener("click", tumOlculeriDegistir);
+    kutu.append(tb);
     if (sonOlcum.uyarilar && sonOlcum.uyarilar.length) {
       const u = document.createElement("div"); u.className = "uyari";
       u.innerHTML = "<h3>Ölçüm sapabilir</h3>" + sonOlcum.uyarilar.map(m => `<p>${m}</p>`).join("");
