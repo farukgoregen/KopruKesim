@@ -49,6 +49,7 @@ if (networkMode)
 }
 
 var app = builder.Build();
+MeasureTrace.Install();   // olcum izi (olcumler\iz): cekirdegin hata ayiklama satirlari her olcumle saklanir
 if (panelPort.HasValue || networkMode)
     app.Lifetime.ApplicationStarted.Register(() =>
     {
@@ -797,6 +798,10 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             && (lensCal.ImageWidth != frame.Cols || lensCal.ImageHeight != frame.Rows);
         LensCalibration geomCal = lensCal;
         MeasureOutput result;
+        var sw = Stopwatch.StartNew();
+        var trace = MeasureTrace.Begin();
+        try
+        {
         if (flat)
         {
             geomCal = FlatTopCalibration(DisplayLengthMm, DisplayWidthMm);
@@ -807,10 +812,33 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             result = TableMeasure.RunWithLens(frame, geomCal, null, options, 0, emptyFlat);
         }
         else result = RunLens(frame, lensCal, layout, options, thickness, cornerMode ? cornerEmptyPath : emptyPath);
+        }
+        finally { trace.Dispose(); }
         using var resultHolder = result;
+        // Iz basligi: olcumu birebir tekrarlamak icin gereken her girdi (kamera sifresi burada yok, hic gelmez)
+        string usedEmpty = cornerMode ? cornerEmptyPath : emptyPath;
+        var head = new System.Text.StringBuilder();
+        head.AppendLine("sure_ms=" + sw.ElapsedMilliseconds);
+        head.AppendLine("dosya_adi=" + (form.Files.GetFile("dosya")?.FileName ?? "-"));
+        head.AppendLine("foto=" + frame.Cols + "x" + frame.Rows + " md5=" + Md5(bytes));
+        head.AppendLine(string.Format(inv, "kalinlik={0} tekrenk={1} kalibrasyon={2} kenar={3} parcaIncelt={4} duz={5}", thickness, uniformTable ? 1 : 0, mode, margin, options.RefineEdges ? 1 : 0, flat ? 1 : 0));
+        head.AppendLine(string.Format(inv, "secenek BorderMarginMm={0} MinAreaMm2={1} NoReferenceBrightnessDiff={2} CleanupMm={3} SimplifyToleranceMm={4} MinEdgeMm={5} RefineEdges={6}",
+            options.BorderMarginMm, options.MinAreaMm2, options.NoReferenceBrightnessDiff, options.CleanupMm, options.Locator.SimplifyToleranceMm, options.Locator.MinEdgeMm, options.RefineEdges));
+        head.AppendLine("bos=" + (File.Exists(usedEmpty) ? usedEmpty + " " + File.GetLastWriteTime(usedEmpty).ToString("yyyy-MM-dd HH:mm:ss") + " md5=" + Md5(File.ReadAllBytes(usedEmpty)) : "yok"));
+        string usedLens = cornerMode ? cornerPath : lensPath;
+        head.AppendLine("--- kalibrasyon " + usedLens);
+        head.AppendLine(File.Exists(usedLens) ? File.ReadAllText(usedLens).TrimEnd() : "yok");
+        head.AppendLine("--- adimlar");
+        head.Append(trace.Text);
+        head.AppendLine("--- sonuc");
+        if (result.Error != null) head.AppendLine("hata=" + result.Error);
+        foreach (var s in result.Slabs)
+            head.AppendLine(string.Format(inv, "parca yontem={0} guvenilir={1} not={2} kenarlar={3} koseler={4}", s.Method, s.IsReliable, s.Note ?? "-",
+                string.Join("/", s.EdgeLengths.Select(e => e.ToString("F1", inv))), string.Join(" ", s.Vertices.Select(v => v.X.ToString("F1", inv) + "," + v.Y.ToString("F1", inv)))));
+        string traceText = head.ToString();
         if (result.Error != null)
         {
-            SaveMeasurement(bytes, null, thickness, formLength, formWidth, result, new List<string>(), method);   // basarisiz olcum de incelensin
+            SaveMeasurement(bytes, null, thickness, formLength, formWidth, result, new List<string>(), method, true, traceText);   // basarisiz olcum de incelensin
             return Results.Json(new { hata = TurkceHata(result.Error) }, statusCode: 400);
         }
         var uyarilar = new List<string>();
@@ -827,7 +855,7 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
         if (flat) uyarilar.Add("Düzeltilmiş (3300 × 2000) görüntü ölçüldü: lens ve kalınlık düzeltmesi görüntüde zaten uygulanmış, yeniden uygulanmadı. Ham kamera fotoğrafı ölçmek daha doğrudur.");
         using Mat display = flat ? frame.Clone() : LensCalibrator.TopViewAt(frame, lensCal, DisplayLengthMm, DisplayWidthMm, 1.0, thickness);
         byte[] displayJpg = display.ToBytes(".jpg", new ImageEncodingParam(ImwriteFlags.JpegQuality, 90));
-        string logId = SaveMeasurement(bytes, displayJpg, thickness, formLength, formWidth, result, uyarilar, method, calibrationTrusted);
+        string logId = SaveMeasurement(bytes, displayJpg, thickness, formLength, formWidth, result, uyarilar, method, calibrationTrusted, traceText);
         TableCalibration used = result.Calibration;
         string image = "data:image/jpeg;base64," + Convert.ToBase64String(displayJpg);
         return Results.Json(new
@@ -865,7 +893,7 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
 // Olcum kaydi: her olcumun fotografi ve sonucu D:\SMO\photos\olcumler altinda saklanir (git disi, yalniz bu bilgisayarda).
 // Sapan olcumleri sonradan inceleyebilmek icin. <id>.jpg duzeltilmis ustten gorunum (1 piksel = 1 mm), ham kamera
 // fotografi ham\<id>.jpg (yeniden olcmek icin). En fazla 300 olcum tutulur; eskileri silinir.
-string SaveMeasurement(byte[] photo, byte[] displayJpg, double thicknessMm, double lengthMm, double widthMm, MeasureOutput r, List<string> warnings, string method, bool calibrationTrusted = true)
+string SaveMeasurement(byte[] photo, byte[] displayJpg, double thicknessMm, double lengthMm, double widthMm, MeasureOutput r, List<string> warnings, string method, bool calibrationTrusted = true, string trace = null)
 {
     try
     {
@@ -875,6 +903,12 @@ string SaveMeasurement(byte[] photo, byte[] displayJpg, double thicknessMm, doub
         string id = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
         File.WriteAllBytes(Path.Combine(rawDir, id + ".jpg"), photo);
         if (displayJpg != null) File.WriteAllBytes(Path.Combine(dir, id + ".jpg"), displayJpg);
+        // Olcum izi ve parca maskesi (SlabDetector KK_DEBUG iken %TEMP%\kk_maske.png'ye yazar)
+        string traceDir = Path.Combine(dir, "iz");
+        Directory.CreateDirectory(traceDir);
+        if (trace != null) File.WriteAllText(Path.Combine(traceDir, id + ".txt"), "id=" + id + "\n" + trace);
+        string maskTmp = Path.Combine(Path.GetTempPath(), "kk_maske.png");
+        if (trace != null && File.Exists(maskTmp)) { File.Copy(maskTmp, Path.Combine(traceDir, id + "_maske.png"), true); File.Delete(maskTmp); }
         var c = r.Calibration;
         var info = new
         {
@@ -894,12 +928,19 @@ string SaveMeasurement(byte[] photo, byte[] displayJpg, double thicknessMm, doub
         foreach (string old in Directory.GetFiles(dir, "*.json").OrderByDescending(f => f).Skip(300))
         {
             string name = Path.GetFileNameWithoutExtension(old);
-            foreach (string f in new[] { old, Path.Combine(dir, name + ".jpg"), Path.Combine(dir, name + "_2.jpg"), Path.Combine(rawDir, name + ".jpg") })
+            foreach (string f in new[] { old, Path.Combine(dir, name + ".jpg"), Path.Combine(dir, name + "_2.jpg"), Path.Combine(rawDir, name + ".jpg"),
+                Path.Combine(dir, "iz", name + ".txt"), Path.Combine(dir, "iz", name + "_maske.png") })
                 if (File.Exists(f)) File.Delete(f);
         }
         return id;
     }
     catch (IOException) { return null; }
+}
+
+static string Md5(byte[] data)
+{
+    using var md5 = System.Security.Cryptography.MD5.Create();
+    return Convert.ToHexString(md5.ComputeHash(data)).ToLowerInvariant();
 }
 
 // Cekirdek kutuphanenin ASCII mesajlarini arayuz icin Turkce harflere cevirir
