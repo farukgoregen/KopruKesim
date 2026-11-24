@@ -71,7 +71,11 @@ if (panelPort.HasValue || networkMode)
         }
     });
 app.UseDefaultFiles();
-app.UseStaticFiles();
+// Arayuz dosyalari onbellege alinmasin: tarayici eski index.html'i gostermesin (yerel arayuz, boyutu kucuk)
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = ctx => ctx.Context.Response.Headers["Cache-Control"] = "no-cache"
+});
 
 var inv = CultureInfo.InvariantCulture;
 var gate = new object();
