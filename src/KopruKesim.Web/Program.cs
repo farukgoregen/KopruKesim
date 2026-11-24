@@ -513,6 +513,7 @@ IResult CalibrateWithMats(byte[] bytes, TableSides sides, MatSpec spec)
         {
             ImageWidth = source.ImageWidth, ImageHeight = source.ImageHeight, Fx = source.Fx, Fy = source.Fy, Cx = source.Cx, Cy = source.Cy,
             Distortion = (double[])source.Distortion.Clone(),
+            ResidualRadial = Fits(camLens) ? camLens.ResidualRadial : 0,   // lensin kalan bukulmesi: kameranin ozelligi
             Rvec = (double[])(Fits(current) ? current : source).Rvec.Clone(), Tvec = (double[])(Fits(current) ? current : source).Tvec.Clone(),
             // Kamera konumu bu kalibrasyondan alinir: dogrulugu da ondan
             MeanMm = (Fits(current) ? current : source).MeanMm, MaxMm = (Fits(current) ? current : source).MaxMm, Points = (Fits(current) ? current : source).Points

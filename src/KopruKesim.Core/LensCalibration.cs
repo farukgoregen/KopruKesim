@@ -51,6 +51,13 @@ namespace KopruKesim.Core
         /// LensCalibrator.ImageToTable / TableToImage bunu kendisi uygular: disaridan bakinca tabla mm'si gercek tabladir.
         /// </summary>
         public TableCorrection Correction;
+        /// <summary>
+        /// Lensin bukulme modelinden kalan radyal hata (1/mm^2, tabla duzleminde, optik eksenin tablayi kestigi nokta
+        /// etrafinda): kameranin sabit ozelligi, kamera-lens.txt'de saklanir ve her paspasli kalibrasyonda tabla
+        /// duzeltmesine (TableCorrection.E) girer. 2026-11-24: siyah plakanin bes konumdaki olcumlerinden bir kez
+        /// hesaplandi (-1,64e-9); yoksa 0 (duzeltme yalniz koseleri oturtur).
+        /// </summary>
+        public double ResidualRadial;
 
         /// <summary>Ayni kalibrasyonun duzeltmesiz kopyasi (modelin ham ciktisi gerektiginde).</summary>
         public LensCalibration WithoutCorrection()
@@ -117,6 +124,8 @@ namespace KopruKesim.Core
             if (PaperCorners != null)
                 lines.Add("KagitKoseleri=" + arr(PaperCorners.SelectMany(p => new[] { p.X, p.Y }).ToArray()));
             lines.Add("KoseKaynagi=" + CornerSource);
+            if (ResidualRadial != 0)
+                lines.Add("KalanBukulme=" + ResidualRadial.ToString("R", c));
             if (Correction != null)
                 lines.Add("TablaDuzeltme=" + arr(Correction.ToValues()));
             System.IO.File.WriteAllLines(path, lines);
@@ -178,6 +187,7 @@ namespace KopruKesim.Core
                         break;
                     case "KenarMm": cal.EdgeRmsMm = double.Parse(val, c); break;
                     case "KoseKaynagi": cal.CornerSource = val == CornerSourceMats ? CornerSourceMats : CornerSourcePaper; break;
+                    case "KalanBukulme": cal.ResidualRadial = double.Parse(val, c); break;
                     case "TablaDuzeltme": cal.Correction = TableCorrection.FromValues(arr(val)); break;
                     case "Nokta": cal.Points = int.Parse(val, c); break;
                     case "Etiket": cal.TagType = val; break;
