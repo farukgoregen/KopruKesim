@@ -594,6 +594,28 @@ app.MapPost("/api/kalibrasyon/bos", async (HttpRequest req) =>
         int tags = CheckerFinder.FindAll(frame, LensTag(c.TagType).Cols, LensTag(c.TagType).Rows).Count;
         if (tags > 0) return Fail($"Fotoğrafta {tags} kalibrasyon daması görünüyor. Boş tabla fotoğrafından önce damaları kaldırın.");
         File.WriteAllBytes(emptyPath, bytes);
+        // Tabla kenarlari: bos tablada tablanin dort kenari bulunur (kenar boyunca 15-30 noktadan dogru, lensin gordugu
+        // sekliyle), koseleri seritle olculen tabla koselerine oturtulur. Boylece cizilen tabla cercevesi tablanin kenarindan
+        // gecer ve olculer girilen tabla olcusune gore yapilir. Paspas koselerinden daha kesin (paspas boylari 429-439 mm).
+        if (c.PaperCorners != null && c.PaperCorners.Length == 4)
+        {
+            LensCalibration raw = c.WithoutCorrection();
+            Point2[] tape = c.PaperCorners;
+            Point2[] expected = c.Correction == null ? tape : tape.Select(c.Correction.Invert).ToArray();
+            TableEdgeFinder.Result edges = TableEdgeFinder.Find(frame, raw, expected);
+            if (edges.Corners != null)
+            {
+                Point2 center = LensCalibrator.ImageToTable(raw, new[] { new Point2(raw.Cx, raw.Cy) })[0];
+                raw.Correction = new TableCorrection(edges.Corners, tape, center, 0);
+                raw.ResidualRadial = 0;
+                raw.Save(lensPath);
+                Point2[] q = edges.Corners;
+                Console.WriteLine(string.Format(inv, "Tabla kenarlari bos tabladan bulundu: kamerada {0:F0} x {1:F0} mm (alt/ust {0:F0}/{2:F0}, sol/sag {1:F0}/{3:F0}); girilen tablaya oturtuldu.",
+                    Point2.Distance(q[2], q[3]), Point2.Distance(q[2], q[0]), Point2.Distance(q[0], q[1]), Point2.Distance(q[3], q[1])));
+                return Results.Json(LensStatus(LoadLens()));
+            }
+            Console.WriteLine("Tabla kenarlari bulunamadi, onceki tabla duzeltmesi kaldi: " + edges.Error);
+        }
         return Results.Json(LensStatus(c));
     }
 });
