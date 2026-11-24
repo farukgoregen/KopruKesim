@@ -88,6 +88,9 @@
   .tuval svg { width: 100%; height: 100%; display: block; max-height: calc(100vh - 170px); }
   .ip-onizleme { width: 100%; height: 100%; display: grid; place-items: center; }
   .ip-onizleme img { display: block; width: 100%; max-height: calc(100vh - 170px); object-fit: contain; }
+  .kal-canli { position: relative; width: 100%; }
+  .kal-canli img { display: block; width: 100%; height: auto; max-height: calc(100vh - 170px); object-fit: contain; }
+  .kal-canli svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   .bos {
     max-width: 44ch; padding: 32px; text-align: left;
   }
@@ -324,6 +327,17 @@
 
     <div class="grup" id="kalibrasyonGrup" hidden>
       <h2>Kamera kalibrasyonu</h2>
+      <div class="sekmeler" role="tablist" aria-label="Paspas sayısı" style="margin-bottom: 8px">
+        <button type="button" class="sekme" role="tab" id="pas4" aria-selected="true">4 paspas</button>
+        <button type="button" class="sekme" role="tab" id="pas6" aria-selected="false">6 paspas</button>
+      </div>
+      <div id="pas6Alan" hidden>
+        <p class="ipucu-kucuk"><b>6 paspas:</b> dört köşeye ek olarak alt ve üst kenarın ortasına birer paspas koyun. Uzun dış kenarı tabla kenarına tam dayalı, uzun kenarı tablanın uzun kenarı boyunca olsun. Her biri için o kenar boyunca, sol tabla köşesinden paspasın sol dış köşesine olan uzaklığı şeritle ölçüp girin. Program bu iki paspastan lensin tablanın ortasındaki kalan bükülmesini de bulur (dört köşe bunu göremez). Ölçümde paspas gerekmez.</p>
+        <div class="satir">
+          <label class="alan">Alt orta paspas: sol köşeden (mm)<input id="kalOrtaAlt" type="number" min="0" step="0.5" placeholder="örn. 1430" inputmode="decimal"></label>
+          <label class="alan">Üst orta paspas: sol köşeden (mm)<input id="kalOrtaUst" type="number" min="0" step="0.5" placeholder="örn. 1430" inputmode="decimal"></label>
+        </div>
+      </div>
       <p class="ipucu-kucuk">Sabit kamera için bir kez yapılır, dama gerekmez. Dört mavi paspas tablanın köşelerinde olmalı: dış köşesi tabla köşesine tam oturur, uzun kenarı tablanın uzun kenarı boyunca. Tablanın dört kenarını (paspasların dış köşeleri arası) şeritle ölçüp aşağıya girin, tabla boşken fotoğrafı çekin. Sol alt paspasın dış köşesi (0,0), X ekseni sağ alt paspasa doğru. Lens bükülmesi kameranın kayıtlı lens bilgisinden alınır. Kamera oynarsa yeniden yapın.</p>
       <div class="satir">
         <label class="alan">Alt kenar (mm)<input id="kalAlt" type="number" min="500" step="0.5" value="3296" inputmode="decimal"></label>
@@ -461,7 +475,8 @@
     <div class="sekmeler" role="tablist">
       <button class="sekme" role="tab" id="sekmeKamera" aria-selected="true">Fotoğraf</button>
       <button class="sekme" role="tab" id="sekmeIpKamera" aria-selected="false" hidden>IP kamera</button>
-      <button class="sekme" role="tab" id="sekmeKalibrasyon" aria-selected="false" hidden>Kalibrasyon</button>
+      <button class="sekme" role="tab" id="sekmeKalCanli" aria-selected="false" hidden>Kalibrasyon canlı</button>
+<button class="sekme" role="tab" id="sekmeKalibrasyon" aria-selected="false"hidden>Kalibrasyon</button>
       <button class="sekme" role="tab" id="sekmeDamasizKal" aria-selected="false" hidden>Damasız kalibrasyon</button>
       <button class="sekme" role="tab" id="sekmeOlcum" aria-selected="false" disabled>Üstten ölçüm</button>
       <button type="button" id="tumOlcuDugme" aria-pressed="false" hidden
@@ -568,6 +583,8 @@
     $("sekmeKamera").setAttribute("aria-selected", gorunum === "kamera");
     $("sekmeIpKamera").hidden = !ipCameraConnected;
     $("sekmeIpKamera").setAttribute("aria-selected", gorunum === "ipkamera");
+    $("sekmeKalCanli").hidden = !(kalibre && ipCameraConnected);
+    $("sekmeKalCanli").setAttribute("aria-selected", gorunum === "kalcanli");
     $("sekmeKalibrasyon").hidden = !kalibre && !cameraCalibrated;
     $("sekmeKalibrasyon").setAttribute("aria-selected", gorunum === "kalibrasyon");
     $("sekmeDamasizKal").hidden = !kalibreDamasiz && !cornerCalibrated;
@@ -591,6 +608,10 @@
     }
     if (gorunum === "ipkamera" && ipCameraConnected) {
       if (!tuval.querySelector(".ip-onizleme")) ipKameraOnizleme(tuval);
+      return;
+    }
+    if (gorunum === "kalcanli" && ipCameraConnected) {
+      if (!tuval.querySelector(".kal-canli")) kalCanliOnizleme(tuval);
       return;
     }
     if (gorunum === "kamera" && sonOlcum && sonOlcum.tablaKoseleri) {
@@ -928,6 +949,7 @@
   $("sekmeKamera").onclick = () => { if (canli.akis) kamerayiKapat(); gorunum = "kamera"; ciz(); };
   $("sekmeIpKamera").onclick = () => { if (canli.akis) kamerayiKapat(); gorunum = "ipkamera"; ciz(); };
   $("sekmeKalibrasyon").onclick = () => { if (canli.akis) kamerayiKapat(); gorunum = "kalibrasyon"; ciz(); };
+  $("sekmeKalCanli").onclick = () => { if (canli.akis) kamerayiKapat(); gorunum = "kalcanli"; ciz(); };
   $("sekmeDamasizKal").onclick = () => { if (canli.akis) kamerayiKapat(); gorunum = "dkal"; ciz(); };
   $("sekmeOlcum").onclick = () => { if (sonOlcum) { if (canli.akis) kamerayiKapat(); gorunum = "olcum"; ciz(); } };
 
@@ -1085,7 +1107,18 @@
   window.addEventListener("resize", yerlestirSvg);
 
   // Tabla olcusu ve tercihler tarayicida hatirlanir (masa ya da ahsap tabla bir kez girilir)
-  const AYAR = ["uzunluk", "genislik", "tekrenk", "kalAlt", "kalUst", "kalSol", "kalSag", "kalKosegen", "kalPaspasUzun", "kalPaspasKisa", "kalPaspasKalinlik"];
+  const AYAR = ["uzunluk", "genislik", "tekrenk", "kalAlt", "kalUst", "kalSol", "kalSag", "kalKosegen", "kalPaspasUzun", "kalPaspasKisa", "kalPaspasKalinlik", "kalOrtaAlt", "kalOrtaUst"];
+  // 4 / 6 paspas sekmesi (tarayicida hatirlanir)
+  let paspas6 = false;
+  function paspasSekme(alti) {
+    paspas6 = alti;
+    $("pas4").setAttribute("aria-selected", !alti); $("pas6").setAttribute("aria-selected", alti);
+    $("pas6Alan").hidden = !alti;
+    try { localStorage.setItem("kopruKesimPaspas", alti ? "6" : "4"); } catch (e) { }
+  }
+  $("pas4").onclick = () => paspasSekme(false);
+  $("pas6").onclick = () => paspasSekme(true);
+  try { paspasSekme(localStorage.getItem("kopruKesimPaspas") === "6"); } catch (e) { }
   document.querySelectorAll('input[name="yontem"]').forEach(r => r.onchange = () => { try { localStorage.setItem("kopruKesimYontem", r.value); } catch (e) { } ciz(); });
   try {
     const y = localStorage.getItem("kopruKesimYontem"), r = [...document.querySelectorAll('input[name="yontem"]')].find(x => x.value === y);
@@ -1126,6 +1159,64 @@
     }
 
     refresh();
+  }
+
+  // Kalibrasyon canli: IP kameranin son karesi, uzerinde goruntunun ortasi (kirmizi arti) ve kayitli kalibrasyona gore
+  // tablanin kenari (sari) ile ortasi (yesil). Kamera ve tabla bu isaretlere bakilarak hizalanir.
+  function kalCanliOnizleme(canvas) {
+    const kutu = document.createElement("div");
+    kutu.className = "kal-canli";
+    const img = new Image(); img.alt = "IP kameranın canlı tabla görüntüsü";
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    kutu.append(img, svg);
+    canvas.replaceChildren(kutu);
+    const hint = $("ipucu");
+    hint.textContent = "IP kamera canlı görüntüsü alınıyor…";
+    let cerceve = null;
+    istek("/api/kalibrasyon/cerceve").then(c => { cerceve = c && c.var ? c : null; isaretle(); }).catch(() => { });
+    function el(ad, at) { const e = document.createElementNS(ns, ad); for (const k in at) e.setAttribute(k, at[k]); return e; }
+    function isaretle() {
+      // Onizleme karesi kucultulmus gelir (960 px); kalibrasyon tam cozunurlukte. Oran aynıysa cizim kalibrasyon
+      // pikselinde yapilir, SVG kendisi olcekler.
+      const nw = img.naturalWidth, nh = img.naturalHeight;
+      if (!nw || !nh) return;
+      const ayni = cerceve && Math.abs(cerceve.goruntu.w / cerceve.goruntu.h - nw / nh) < 0.01;
+      const w = ayni ? cerceve.goruntu.w : nw, h = ayni ? cerceve.goruntu.h : nh;
+      svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+      const s = Math.max(w, h) / 400;   // isaret boyu goruntuyle orantili
+      const parca = [];
+      if (ayni) {
+        parca.push(el("polygon", { points: cerceve.tablaKenari.map(p => p.join(",")).join(" "), fill: "none", stroke: "#f5c400", "stroke-width": s * 0.8 }));
+        const [mx, my] = cerceve.tablaMerkezi;
+        parca.push(el("circle", { cx: mx, cy: my, r: s * 4, fill: "none", stroke: "#18c060", "stroke-width": s * 0.8 }));
+        parca.push(el("circle", { cx: mx, cy: my, r: s * 1.2, fill: "#18c060" }));
+      }
+      const cx = w / 2, cy = h / 2, L = s * 12;
+      parca.push(el("line", { x1: cx - L, y1: cy, x2: cx + L, y2: cy, stroke: "#ff2a2a", "stroke-width": s * 0.6 }));
+      parca.push(el("line", { x1: cx, y1: cy - L, x2: cx, y2: cy + L, stroke: "#ff2a2a", "stroke-width": s * 0.6 }));
+      parca.push(el("circle", { cx, cy, r: s * 1.5, fill: "#ff2a2a" }));
+      svg.replaceChildren(...parca);
+      hint.textContent = "Kırmızı artı: kamera görüntüsünün ortası. "
+        + (cerceve ? (ayni ? "Sarı çizgi: kayıtlı kalibrasyona göre tablanın kenarı, yeşil nokta: tablanın ortası. Kamera oynamadıysa sarı çizgi tablanın kenarına oturur." : "Kayıtlı kalibrasyon başka çözünürlükte; tabla çizilmedi.")
+          : "Kalibrasyon yok: yalnız görüntünün ortası gösteriliyor.");
+    }
+    function yenile() {
+      if (!kutu.isConnected) return;
+      if (document.hidden) { setTimeout(yenile, 1000); return; }
+      const kare = new Image();
+      kare.onload = () => {
+        if (!kutu.isConnected) return;
+        const ilk = !img.naturalWidth || img.naturalWidth !== kare.naturalWidth;
+        img.src = kare.src;
+        img.onload = () => { if (ilk) isaretle(); };
+        setTimeout(yenile, 500);
+      };
+      kare.onerror = () => { if (!kutu.isConnected) return; hint.textContent = "Kare alınamadı. Yeniden deneniyor…"; setTimeout(yenile, 2000); };
+      kare.src = "/api/kamera/kare?onizleme=1&t=" + Date.now();
+    }
+    yenile();
   }
 
   function kamDurumYaz(d) {
@@ -1337,6 +1428,10 @@
     if (!$("kalDamali").checked)   // paspasli kalibrasyon: dort kenar + paspas olculeri
       for (const [ad, id] of [["alt", "kalAlt"], ["ust", "kalUst"], ["sol", "kalSol"], ["sag", "kalSag"], ["kosegen", "kalKosegen"],
         ["paspasUzun", "kalPaspasUzun"], ["paspasKisa", "kalPaspasKisa"], ["paspasKalinlik", "kalPaspasKalinlik"]]) f.append(ad, $(id).value);
+    if (!$("kalDamali").checked && paspas6) {   // 6 paspas: alt ve ust kenar ortasindaki paspaslarin yeri
+      if (!$("kalOrtaAlt").value || !$("kalOrtaUst").value) { hata("6 paspasta alt ve üst orta paspasın sol köşeden uzaklığını girin."); return; }
+      f.append("ortaAlt", $("kalOrtaAlt").value); f.append("ortaUst", $("kalOrtaUst").value);
+    }
     hata(""); $("kalDurum").textContent = "Kalibre ediliyor…";
     try {
       const r = await istek("/api/kalibrasyon", f);

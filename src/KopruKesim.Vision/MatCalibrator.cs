@@ -14,6 +14,16 @@ namespace KopruKesim.Vision
         public double Diagonal = double.NaN;
     }
 
+    /// <summary>
+    /// 6 paspasli kalibrasyon: alt ve ust kenarin ortasina birer paspas daha. Paspasin uzun dis kenari tabla kenarina
+    /// dayali; deger, o kenar boyunca sol tabla kosesinden paspasin sol dis kosesine seritle olculen uzaklik (mm).
+    /// </summary>
+    public sealed class MidMats
+    {
+        public double BottomX = double.NaN, TopX = double.NaN;
+        public bool Any => !double.IsNaN(BottomX) || !double.IsNaN(TopX);
+    }
+
     /// <summary>Kose paspasinin olculeri: uzun kenar tablanin uzun kenari (X) boyunca.</summary>
     public sealed class MatSpec
     {
@@ -55,6 +65,12 @@ namespace KopruKesim.Vision
             public Point2[] PhotoCorners;
             /// <summary>Tabla duzeltmesinin tablada en buyuk kaydirmasi (mm).</summary>
             public double CorrectionMaxMm = double.NaN;
+            /// <summary>6 paspasta: orta paspaslarin dis koselerinin duzeltmeden sonra kalan hatasi (mm; alt sol, alt sag, ust sol, ust sag).</summary>
+            public double[] MidErrorMm;
+            /// <summary>6 paspasta: yalniz kose duzeltmesiyle (kayitli kalan bukulme) orta dis koselerin hatasi (mm).</summary>
+            public double[] MidRawErrorMm;
+            /// <summary>6 paspasta bulunan kalan bukulme katsayisi.</summary>
+            public double FittedRadial = double.NaN;
         }
 
         /// <summary>Tabla koseleri (mm): sol ust, sag ust, sol alt, sag alt. Orijin sol alt, X sag alta dogru.</summary>
@@ -91,7 +107,18 @@ namespace KopruKesim.Vision
             return new[] { c, c + u * spec.LongMm, c + u * spec.LongMm + n * spec.ShortMm, c + n * spec.ShortMm };
         }
 
-        public static Result Calibrate(Mat frame, TableSides sides, MatSpec spec, LensCalibration lens)
+        /// <summary>Orta paspasin dort kosesi (tabla mm): 0 sol dis, 1 sag dis (tabla kenarinda), 2 sag ic, 3 sol ic.</summary>
+        public static Point2[] MidMatCorners(Point2[] table, bool top, double x, MatSpec spec)
+        {
+            Point2 a = top ? table[0] : table[2], b = top ? table[1] : table[3], other = top ? table[2] : table[0];
+            Point2 u = (b - a) * (1 / (b - a).Length);
+            var n = new Point2(-u.Y, u.X);
+            if (Point2.Dot(n, other - a) < 0) n = n * -1;   // tablanin icine
+            Point2 c = a + u * x;
+            return new[] { c, c + u * spec.LongMm, c + u * spec.LongMm + n * spec.ShortMm, c + n * spec.ShortMm };
+        }
+
+        public static Result Calibrate(Mat frame, TableSides sides, MatSpec spec, LensCalibration lens, MidMats mids = null)
         {
             var res = new Result();
             lens = lens?.WithoutCorrection();   // eski duzeltme modelin ham ciktisini bozmasin
@@ -348,7 +375,66 @@ namespace KopruKesim.Vision
                 Point2[] photo = LensCalibrator.ImageToTable(cal, outerPx, h);
                 Point2 center = LensCalibrator.ImageToTable(cal, new[] { new Point2(cal.Cx, cal.Cy) })[0];
                 cal.ResidualRadial = prior.ResidualRadial;
-                cal.Correction = new TableCorrection(photo, table, center, cal.ResidualRadial);
+                if (mids != null && mids.Any)
+                {
+                    // 6 paspas: orta paspaslarin tabla kenarindaki dis koseleri de eklenir; kalan bukulme (E) bunlardan
+                    // bulunur (kenarin ortasindaki sapma E'yi belirler, dort kose belirlemez)
+                    var meas = photo.ToList(); var tru = table.ToList();
+                    var used = new HashSet<BlueMatFinder.BlueMat>(mats);
+                    foreach (bool top in new[] { false, true })
+                    {
+                        double x = top ? mids.TopX : mids.BottomX;
+                        if (double.IsNaN(x)) continue;
+                        string name = top ? "Üst" : "Alt";
+                        Point2[] model = MidMatCorners(table, top, x, spec);
+                        Point2[] proj = LensCalibrator.TableToImage(cal, model, h);
+                        Point2 pc = new Point2(proj.Average(q => q.X), proj.Average(q => q.Y));
+                        BlueMatFinder.BlueMat cand = found.Where(f => !used.Contains(f)).OrderBy(f => Point2.Distance(f.Center, pc)).FirstOrDefault();
+                        if (cand == null || Point2.Distance(cand.Center, pc) > w * 0.08)
+                        {
+                            res.Error = string.Format("{0} kenarın ortasındaki paspas bulunamadı (fotoğrafta beklenen yer {1:F0},{2:F0} px). Girilen uzaklığı ve paspasın kenara dayalı olduğunu kontrol edin.", name, pc.X, pc.Y);
+                            return res;
+                        }
+                        used.Add(cand);
+                        Point2[] img2 = null;
+                        foreach (double tolPx in new[] { 80.0, 25.0 })
+                        {
+                            if (img2 != null)
+                            {
+                                // Ikinci tur: ilk turda bulunan koselerden tahmin (kenar noktalari gercek kenarin yakinindan)
+                                proj = img2;
+                            }
+                            BlueMatFinder.BlueMat work = BlueMatFinder.Resample(cand, proj, tolPx);
+                            if (work.Sides.Any(sd => sd.Length < 5)) { res.Error = name + " kenarın ortasındaki paspasın kenarları yeterince görünmüyor."; return res; }
+                            var nr = new Point2[4]; var of = new double[4];
+                            for (int sd = 0; sd < 4; sd++) LensCalibrator.RobustLine(work.Sides[sd].Select(undist).ToArray(), out nr[sd], out of[sd], out _);
+                            var next = new Point2[4];
+                            for (int i = 0; i < 4; i++)
+                            {
+                                int a = (i + 3) % 4;
+                                if (Math.Abs(nr[a].X * nr[i].Y - nr[a].Y * nr[i].X) < 0.2) { res.Error = name + " kenarın ortasındaki paspasın köşeleri hesaplanamadı."; return res; }
+                                next[i] = Distort(lens, PlanarBundle.Intersect(nr[a], of[a], nr[i], of[i]));
+                            }
+                            img2 = next;
+                        }
+                        Point2[] back = LensCalibrator.ImageToTable(cal, img2, h);
+                        if (Debug)
+                            Console.WriteLine("  orta paspas {0}: fotograftan kenarlar {1} mm, dis koseler ({2:F1},{3:F1})->({4:F1},{5:F1}) ({6:F1},{7:F1})->({8:F1},{9:F1})", name,
+                                string.Join("/", Enumerable.Range(0, 4).Select(i => Point2.Distance(back[i], back[(i + 1) % 4]).ToString("F0"))),
+                                back[0].X, back[0].Y, model[0].X, model[0].Y, back[1].X, back[1].Y, model[1].X, model[1].Y);
+                        for (int i = 0; i < 2; i++) { meas.Add(back[i]); tru.Add(model[i]); }
+                    }
+                    // Karsilastirma: yalniz kose duzeltmesi + kayitli kalan bukulmeyle orta noktalar nereye gidiyordu
+                    var cornersOnly = new TableCorrection(photo, table, center, prior.ResidualRadial);
+                    res.MidRawErrorMm = Enumerable.Range(4, meas.Count - 4).Select(i => Point2.Distance(cornersOnly.Apply(meas[i]), tru[i])).ToArray();
+                    cal.Correction = TableCorrection.Fit(meas.ToArray(), tru.ToArray(), center, out double rms);
+                    cal.ResidualRadial = cal.Correction.E;
+                    res.FittedRadial = cal.Correction.E;
+                    res.MidErrorMm = Enumerable.Range(4, meas.Count - 4).Select(i => Point2.Distance(cal.Correction.Apply(meas[i]), tru[i])).ToArray();
+                    if (Debug) Console.WriteLine("  6 paspas: kalan bukulme {0:E2} (kayitli {1:E2}), orta koseler once {2} mm, sonra {3} mm, rms {4:F2}", cal.Correction.E, prior.ResidualRadial,
+                        string.Join("/", res.MidRawErrorMm.Select(v => v.ToString("F1"))), string.Join("/", res.MidErrorMm.Select(v => v.ToString("F1"))), rms);
+                }
+                else cal.Correction = new TableCorrection(photo, table, center, cal.ResidualRadial);
                 res.PhotoCorners = photo;
                 res.CorrectionMaxMm = cal.Correction.MaxShiftMm();
                 cal.PaperCorners = (Point2[])table.Clone();

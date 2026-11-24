@@ -29,8 +29,10 @@ namespace KopruKesim.Core
 
         public TableCorrection(Point2[] measured, Point2[] trueCorners, Point2 center, double e)
         {
-            if (measured == null || measured.Length != 4 || trueCorners == null || trueCorners.Length != 4)
-                throw new ArgumentException("Dort kose gerekli.");
+            // Ilk dort nokta tabla koseleri (sol ust, sag ust, sol alt, sag alt); 6 paspasli kalibrasyonda ardindan orta
+            // paspaslarin tabla kenarindaki dis koseleri gelir. Dortten fazla noktada homografi en kucuk karelerle.
+            if (measured == null || measured.Length < 4 || trueCorners == null || trueCorners.Length != measured.Length)
+                throw new ArgumentException("En az dort nokta gerekli.");
             Measured = (Point2[])measured.Clone();
             True = (Point2[])trueCorners.Clone();
             Center = center; E = e;
@@ -91,18 +93,46 @@ namespace KopruKesim.Core
             return max;
         }
 
-        /// <summary>Kayit icin 19 deger: olculen koseler (8), gercek koseler (8), merkez (2), E.</summary>
+        /// <summary>
+        /// E'yi noktalardan bulur: her E icin homografi en kucuk karelerle kurulur, noktalarin gercek yerden en kucuk
+        /// kareler sapmasi en az olan E secilir (altin oran arama). Dort noktada E belirlenemez (homografi her E'de tam
+        /// oturur); kenar ortasindaki noktalar kenarin egriligini, yani E'yi belirler.
+        /// </summary>
+        public static TableCorrection Fit(Point2[] measured, Point2[] trueCorners, Point2 center, out double rmsMm)
+        {
+            Func<double, double> cost = e =>
+            {
+                var c = new TableCorrection(measured, trueCorners, center, e);
+                double sq = 0;
+                for (int i = 0; i < measured.Length; i++) { double d = Point2.Distance(c.Apply(measured[i]), trueCorners[i]); sq += d * d; }
+                return Math.Sqrt(sq / measured.Length);
+            };
+            // |E| < 2e-8: tablanin kosesinde (r ~ 2000 mm) %8 kayma; gercek degerler 1e-9 mertebesinde
+            double lo = -2e-8, hi = 2e-8, g = (Math.Sqrt(5) - 1) / 2;
+            double x1 = hi - g * (hi - lo), x2 = lo + g * (hi - lo), f1 = cost(x1), f2 = cost(x2);
+            for (int i = 0; i < 80; i++)
+            {
+                if (f1 < f2) { hi = x2; x2 = x1; f2 = f1; x1 = hi - g * (hi - lo); f1 = cost(x1); }
+                else { lo = x1; x1 = x2; f1 = f2; x2 = lo + g * (hi - lo); f2 = cost(x2); }
+            }
+            double best = (lo + hi) / 2;
+            rmsMm = cost(best);
+            return new TableCorrection(measured, trueCorners, center, best);
+        }
+
+        /// <summary>Kayit icin 4n+3 deger: olculen noktalar (2n), gercek noktalar (2n), merkez (2), E. Dort kosede 19.</summary>
         public double[] ToValues() =>
             Measured.SelectMany(p => new[] { p.X, p.Y }).Concat(True.SelectMany(p => new[] { p.X, p.Y }))
                 .Concat(new[] { Center.X, Center.Y, E }).ToArray();
 
         public static TableCorrection FromValues(double[] v)
         {
-            if (v == null || v.Length != 19 || v.Any(x => double.IsNaN(x) || double.IsInfinity(x)))
-                throw new FormatException("Tabla duzeltmesi 19 sonlu deger olmali.");
-            Point2[] m = Enumerable.Range(0, 4).Select(i => new Point2(v[2 * i], v[2 * i + 1])).ToArray();
-            Point2[] t = Enumerable.Range(0, 4).Select(i => new Point2(v[8 + 2 * i], v[8 + 2 * i + 1])).ToArray();
-            return new TableCorrection(m, t, new Point2(v[16], v[17]), v[18]);
+            if (v == null || v.Length < 19 || (v.Length - 3) % 4 != 0 || v.Any(x => double.IsNaN(x) || double.IsInfinity(x)))
+                throw new FormatException("Tabla duzeltmesi 4n+3 (n >= 4) sonlu deger olmali.");
+            int n = (v.Length - 3) / 4;
+            Point2[] m = Enumerable.Range(0, n).Select(i => new Point2(v[2 * i], v[2 * i + 1])).ToArray();
+            Point2[] t = Enumerable.Range(0, n).Select(i => new Point2(v[2 * n + 2 * i], v[2 * n + 2 * i + 1])).ToArray();
+            return new TableCorrection(m, t, new Point2(v[4 * n], v[4 * n + 1]), v[4 * n + 2]);
         }
     }
 }
