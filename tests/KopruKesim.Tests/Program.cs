@@ -346,8 +346,70 @@ static class Program
         Check(Math.Abs(fitPhi - Math.PI / 2) < 1e-9 && Point2.Distance(fitShift, new Point2(3, 4)) < 1e-9, "rijit oturtma");
     }
 
+    static void TestTableCorrection()
+    {
+        Console.WriteLine("Tabla duzeltmesi:");
+        // Gercek tabla: seritle olculen kenarlar + kosegen (sol ust, sag ust, sol alt, sag alt)
+        Point2[] truth = { new Point2(-3.0, 1991.0), new Point2(3297.0, 1988.0), new Point2(0, 0), new Point2(3296, 0) };
+        // Modelin olctugu tabla: kalan lens hatasi (merkezden uzaklastikca buyuyen olcek, r^3) + kamera konumu hatasi
+        // (hafif donme, egiklik, olcek)
+        var mid = new Point2(1600, 1050);
+        var H0 = new Homography(new[] { 1.004, 0.006, -5.0, -0.004, 0.997, 3.0, 2e-6, -1e-6, 1.0 });
+        Func<Point2, Point2> warp = p => { Point2 d = p - mid; double r2 = (d.X * d.X + d.Y * d.Y) / 1e6; return H0.Transform(mid + d * (1 - 0.006 * r2)); };
+        Point2[] measured = truth.Select(warp).ToArray();
+        var rnd = new Random(7);
+        Func<double> noise = () => (rnd.NextDouble() - 0.5);
+        var edges = new List<TableCorrection.EdgeSample>[4];
+        var mats = new List<Tuple<Point2[], Point2[]>>();
+        for (int e = 0; e < 4; e++)
+        {
+            edges[e] = new List<TableCorrection.EdgeSample>();
+            TableCorrection.EdgeEnds(truth, e, out Point2 a, out Point2 b);
+            Point2 d = (b - a) * (1 / Point2.Distance(a, b)), n = new Point2(-d.Y, d.X);
+            if (Point2.Dot(n, a - mid) < 0) n = n * -1;
+            double len = Point2.Distance(a, b), mat = e % 2 == 0 ? 435 : 150;
+            for (double s = mat + 60; s <= len - mat - 60; s += 40)
+                edges[e].Add(new TableCorrection.EdgeSample(warp(a + d * s + n * noise()), false));
+            for (double s = 10; s < mat; s += 15)   // paspas kenari 2 mm disari tasiyor
+            {
+                edges[e].Add(new TableCorrection.EdgeSample(warp(a + d * s + n * (2 + noise())), true));
+                edges[e].Add(new TableCorrection.EdgeSample(warp(b - d * s + n * (2 + noise())), true));
+            }
+        }
+        for (int c = 0; c < 4; c++)
+        {
+            // Paspas: kosede 435 x 150, uzun kenari X boyunca
+            Point2 o = truth[c], ux = (truth[c ^ 1] - o) * (1 / Point2.Distance(truth[c ^ 1], o)), uy = (truth[(c + 2) % 4] - o) * (1 / Point2.Distance(truth[(c + 2) % 4], o));
+            Point2[] mq = { o, o + ux * 435, o + ux * 435 + uy * 150, o + uy * 150 };
+            mats.Add(Tuple.Create(mq.Select(p => warp(p) + new Point2(noise(), noise())).ToArray(), mq));
+        }
+        var corr = TableCorrection.Fit(measured, truth, warp(mid), edges, mats, out TableCorrection.FitReport rep);
+        Console.WriteLine("    E {0:E2}, kenar duzlugu once {1} sonra {2} mm, sol alt paspas once {3} sonra {4}", rep.E,
+            string.Join("/", rep.StraightBefore.Select(v => v.ToString("F1"))), string.Join("/", rep.StraightAfter.Select(v => v.ToString("F1"))),
+            string.Join("/", rep.MatBefore[2].Select(v => v.ToString("F0"))), string.Join("/", rep.MatAfter[2].Select(v => v.ToString("F0"))));
+        Check(Enumerable.Range(0, 4).All(i => Near(corr.Apply(measured[i]), truth[i], 1e-6)), "koseler gercek koselere gider");
+        double maxErr = 0, maxRaw = 0;
+        for (int i = 0; i <= 10; i++)
+            for (int j = 0; j <= 10; j++)
+            {
+                Point2 p = new Point2(3296 * i / 10.0, 1990 * j / 10.0);
+                maxErr = Math.Max(maxErr, Point2.Distance(corr.Apply(warp(p)), p));
+                maxRaw = Math.Max(maxRaw, Point2.Distance(warp(p), p));
+            }
+        Console.WriteLine("    duzeltmesiz en buyuk hata {0:F1} mm, duzeltmeyle {1:F2} mm", maxRaw, maxErr);
+        Check(maxRaw > 10 && maxErr < 1.5, "lens ve konum hatasi tablanin icinde de gider");
+        Point2 q0 = new Point2(1234.5, 678.9);
+        Check(Near(corr.Apply(corr.Invert(q0)), q0, 1e-6), "ters donusum");
+        var re = TableCorrection.FromValues(corr.ToValues());
+        Check(Near(re.Apply(warp(q0)), corr.Apply(warp(q0)), 1e-9), "kayit / okuma");
+        Point2 q = q0;
+        var plain = new TableCorrection(truth, truth, mid, 0);
+        Check(Near(plain.Apply(q), q, 1e-9) && Near(plain.Invert(q), q, 1e-9), "kayma yoksa nokta degismez");
+    }
+
     static int Main()
     {
+        TestTableCorrection();
         TestHomography();
         TestLensCalibrationFile();
         TestPlanarBundle();

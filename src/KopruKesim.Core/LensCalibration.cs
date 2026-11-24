@@ -46,6 +46,19 @@ namespace KopruKesim.Core
         /// <summary>Tabla koselerinin kaynagi: "kagit" (kose kagitlarinin dis koseleri) ya da "mavi" (mavi paspaslarin dis koseleri).</summary>
         public string CornerSource = CornerSourcePaper;
         public const string CornerSourcePaper = "kagit", CornerSourceMats = "mavi";
+        /// <summary>
+        /// Modelin tabladaki kalan hatasini seritle olculen tablaya gore duzelten alan (paspasli kalibrasyon); yoksa null.
+        /// LensCalibrator.ImageToTable / TableToImage bunu kendisi uygular: disaridan bakinca tabla mm'si gercek tabladir.
+        /// </summary>
+        public TableCorrection Correction;
+
+        /// <summary>Ayni kalibrasyonun duzeltmesiz kopyasi (modelin ham ciktisi gerektiginde).</summary>
+        public LensCalibration WithoutCorrection()
+        {
+            var c = (LensCalibration)MemberwiseClone();
+            c.Correction = null;
+            return c;
+        }
 
         /// <summary>Kagit koselerinin girilen tabla dikdortgeninin koselerinden en buyuk uzakligi (mm); bilinmiyorsa NaN.</summary>
         public double PaperCornerDeviationMm()
@@ -104,6 +117,8 @@ namespace KopruKesim.Core
             if (PaperCorners != null)
                 lines.Add("KagitKoseleri=" + arr(PaperCorners.SelectMany(p => new[] { p.X, p.Y }).ToArray()));
             lines.Add("KoseKaynagi=" + CornerSource);
+            if (Correction != null)
+                lines.Add("TablaDuzeltme=" + arr(Correction.ToValues()));
             System.IO.File.WriteAllLines(path, lines);
         }
 
@@ -163,6 +178,7 @@ namespace KopruKesim.Core
                         break;
                     case "KenarMm": cal.EdgeRmsMm = double.Parse(val, c); break;
                     case "KoseKaynagi": cal.CornerSource = val == CornerSourceMats ? CornerSourceMats : CornerSourcePaper; break;
+                    case "TablaDuzeltme": cal.Correction = TableCorrection.FromValues(arr(val)); break;
                     case "Nokta": cal.Points = int.Parse(val, c); break;
                     case "Etiket": cal.TagType = val; break;
                     default: break;   // ileride eklenecek alanlar eski surumu bozmasin

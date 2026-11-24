@@ -53,7 +53,19 @@ namespace KopruKesim.Vision
             public bool UsedPriorPose;
             /// <summary>Paspaslarin dis koselerinin fotograftan bulunan yeri (tabla mm): sol ust, sag ust, sol alt, sag alt.</summary>
             public Point2[] PhotoCorners;
+            /// <summary>Tabla kenarlarinin bulunmasi ve duzeltme ozeti; duzeltme kapaliysa null.</summary>
+            public TableEdgeFit.Report EdgeReport;
+            /// <summary>Duzeltmenin tablada en buyuk kaydirmasi (mm).</summary>
+            public double CorrectionMaxMm = double.NaN;
         }
+
+        /// <summary>
+        /// Seritle olculen tablaya gore duzeltme. Varsayilan KAPALI (KK_TABLA_DUZELTME=1 ile acilir): 2026-11-24 gercek
+        /// fotograflarda (siyah plaka 1469 x 570) ortadaki plakayi 1458'den 1445'e kotulestirdi; paspas boylari (435 yerine
+        /// ~422 olculuyor) radyal katsayiyi ters yone itiyor, ortadaki X olcek eksigi (-%0,8) Y'de yok. Bilinen plakanin
+        /// birkac konumdaki olcumleriyle dogrulanmadan acilmamali.
+        /// </summary>
+        public static bool UseTableCorrection = Environment.GetEnvironmentVariable("KK_TABLA_DUZELTME") == "1";
 
         /// <summary>Tabla koseleri (mm): sol ust, sag ust, sol alt, sag alt. Orijin sol alt, X sag alta dogru.</summary>
         public static Point2[] TableCorners(TableSides s, out string error)
@@ -92,6 +104,7 @@ namespace KopruKesim.Vision
         public static Result Calibrate(Mat frame, TableSides sides, MatSpec spec, LensCalibration lens)
         {
             var res = new Result();
+            lens = lens?.WithoutCorrection();   // eski duzeltme modelin ham ciktisini bozmasin
             LensCalibration prior = lens;
             int w = frame.Cols, hgt = frame.Rows;
             if (lens == null || lens.ImageWidth != w || lens.ImageHeight != hgt)
@@ -332,6 +345,29 @@ namespace KopruKesim.Vision
                 cal.TableLengthMm = Math.Round(Math.Max(photo[1].X, photo[3].X), 1);
                 cal.TableWidthMm = Math.Round(Math.Max(photo[0].Y, photo[1].Y), 1);
                 if (!double.IsNaN(prior.MaxMm) && prior.Points > 0) { cal.MeanMm = prior.MeanMm; cal.MaxMm = prior.MaxMm; cal.Points = prior.Points; }
+            }
+
+            // Seritle olculen tablaya gore duzeltme: modelin olctugu tabla (paspas dis koseleri + fotograftaki tabla
+            // kenarlari) gercek tablaya (girilen kenarlar + kosegen) esitlenir. Bundan sonra ImageToTable gercek mm verir.
+            if (UseTableCorrection)
+            {
+                var outerPx = new Point2[4];
+                for (int m = 0; m < 4; m++)
+                    for (int i = 0; i < 4; i++)
+                        if (Point2.Distance(modelCorners[m][i], table[m]) < 1e-6) outerPx[m] = Distort(lens, imageCorners[m][i]);
+                Point2[] photo = LensCalibrator.ImageToTable(cal, outerPx, h);
+                var matEdge = new List<Point2>();
+                foreach (var sl in sideLines) matEdge.AddRange(LensCalibrator.ImageToTable(cal, sl.Item1, h));
+                var matPairs = new List<Tuple<Point2[], Point2[]>>();
+                for (int m = 0; m < 4; m++)
+                    matPairs.Add(Tuple.Create(LensCalibrator.ImageToTable(cal, imageCorners[m].Select(q => Distort(lens, q)).ToArray(), h), (Point2[])modelCorners[m].Clone()));
+                cal.Correction = TableEdgeFit.Build(frame, cal, photo, table, spec, matEdge, matPairs, out res.EdgeReport);
+                res.PhotoCorners = photo;
+                res.CorrectionMaxMm = cal.Correction.MaxShiftMm();
+                cal.PaperCorners = (Point2[])table.Clone();
+                cal.TableLengthMm = Math.Round(Math.Max(table[1].X, table[3].X), 1);
+                cal.TableWidthMm = Math.Round(Math.Max(table[0].Y, table[1].Y), 1);
+                if (Debug) Console.WriteLine("tabla duzeltmesi: en buyuk kayma {0:F1} mm", res.CorrectionMaxMm);
             }
             if (Debug)
                 Console.WriteLine("paspas kalibrasyonu: kose hatasi ort {0:F2} en buyuk {1:F2} mm (paspas basina {2}), kenar rms {3:F2} mm, kamera {4}",

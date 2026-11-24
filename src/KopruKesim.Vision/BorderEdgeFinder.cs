@@ -95,6 +95,7 @@ namespace KopruKesim.Vision
                 }
                 if (!ok || overhang)
                 {
+                    if (Debug) Console.WriteLine("    [kenar " + e + "] " + (ok ? "tasiyor gibi (" + why + ")" : "bulunamadi: " + why) + (inBand ? ", seritte" : ""));
                     // Parca ile tablanin disi ayni renkteyse (siyah plaka, siyah sase) kenar fotografta gorulemez. Parca bos
                     // tablaya gore tablanin kenarina kadar uzaniyorsa ve kenari tablanin kenarina paralelse oraya hizali say.
                     Point2 sp, sd;
@@ -245,6 +246,8 @@ namespace KopruKesim.Vision
                     }
                 }
             }
+            if (Debug) Console.WriteLine("    renk profili: ic renk L{0:F0} a{1:F0} b{2:F0}, kenar (mm, disari): {3}", rl, ra, rb,
+                string.Join(" ", found.Select(f => Point2.Dot(f - a, outward).ToString("F0"))));
             if (found.Count < n * 0.6) { why = string.Format("profillerin {0}/{1} kenari buldu", found.Count, n); return false; }
             return FitRobust(found, n, dir, out lineP, out lineD, out why);
         }
@@ -283,6 +286,26 @@ namespace KopruKesim.Vision
             why = null;
             List<Point2> cur = found;
             lineP = found[0]; lineD = dir;
+            // Once en cok noktanin 3 mm icinde kaldigi cizgi (nokta ciftlerinden): parcadaki parlama ya da leke bazi
+            // profillerde kenari parcanin icinde gosteriyor; hepsine birden oturtulan cizgi iki kumenin arasina dusup
+            // gercek kenar da reddediliyordu (2026-11-24: sol alttaki siyah plaka, 24 profilin 7-10'u parlamada).
+            if (found.Count >= 4)
+            {
+                int bestCount = 0; List<Point2> bestSet = null;
+                double cosMax = Math.Cos(10 * Math.PI / 180);
+                for (int i = 0; i < found.Count; i++)
+                    for (int j = i + 1; j < found.Count; j++)
+                    {
+                        Point2 d = found[j] - found[i]; double l = d.Length;
+                        if (l < 1e-6) continue;
+                        d = d * (1 / l);
+                        if (Math.Abs(Point2.Dot(d, dir)) < cosMax) continue;
+                        Point2 nr = new Point2(-d.Y, d.X), pi = found[i];
+                        List<Point2> inl = found.Where(p => Math.Abs(Point2.Dot(p - pi, nr)) <= 3).ToList();
+                        if (inl.Count > bestCount) { bestCount = inl.Count; bestSet = inl; }
+                    }
+                if (bestSet != null && bestSet.Count >= 2) cur = bestSet;
+            }
             for (int pass = 0; pass < 3; pass++)
             {
                 FitLine(cur, out lineP, out lineD);

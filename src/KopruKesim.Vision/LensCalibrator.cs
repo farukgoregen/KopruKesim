@@ -588,6 +588,8 @@ namespace KopruKesim.Vision
                 double dx = r[0] * q.X + r[3] * q.Y + r[6], dy = r[1] * q.X + r[4] * q.Y + r[7], dz = r[2] * q.X + r[5] * q.Y + r[8];
                 double s = Math.Abs(dz) < 1e-12 ? double.NaN : (zp - cz) / dz;
                 res[i] = new Point2(cx + s * dx, cy + s * dy);
+                // Seritle olculen tablaya gore kalan hata duzeltmesi (yukseklikten bagimsiz kabul: kalinlikla degisimi < 1 mm)
+                if (cal.Correction != null) res[i] = cal.Correction.Apply(res[i]);
             }
             return res;
         }
@@ -637,7 +639,12 @@ namespace KopruKesim.Vision
             using (var rv = new Mat(3, 1, MatType.CV_64FC1))
             using (var tv = new Mat(3, 1, MatType.CV_64FC1))
             {
-                for (int i = 0; i < table.Length; i++) obj.Set(i, 0, new Vec3d(table[i].X, table[i].Y, z));
+                TableCorrection corr = cal.Correction;
+                for (int i = 0; i < table.Length; i++)
+                {
+                    Point2 m = corr == null ? table[i] : corr.Invert(table[i]);
+                    obj.Set(i, 0, new Vec3d(m.X, m.Y, z));
+                }
                 for (int i = 0; i < 3; i++) { rv.Set(i, 0, cal.Rvec[i]); tv.Set(i, 0, cal.Tvec[i]); }
                 Cv2.ProjectPoints(obj, rv, tv, k, d, img);
                 var res = new Point2[table.Length];
