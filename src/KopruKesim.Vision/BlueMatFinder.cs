@@ -132,9 +132,11 @@ namespace KopruKesim.Vision
                 }
                 finally { foreach (Mat m in bc) m.Dispose(); }
                 float[] blueness; blue.GetArray(out blueness);
-                // Mavi: ton 90-130 (OpenCV 0-180), cok doygun (paspas ~220-255; mavimsi beton, kagit, kablo ~30-75; karanlik
-                // bolgelerde kucuk renk kaymasi doygunlugu ~100e cikarabiliyor), cok karanlik degil
-                Cv2.InRange(hsv, new Scalar(90, 140, 50), new Scalar(130, 255, 255), mask);
+                // Mavi: ton 104-130 (OpenCV 0-180), cok doygun, cok karanlik degil. Olculen (2026-11-24, iki canli kare):
+                // paspas ici ton 108-112, doygunluk ortanca 243-255; mavimsi beton zemin ve beyaz yan paneller ton 99-104,
+                // doygunluk ortanca ~150, en fazla ~200. Eski esik (ton 90, doygunluk 140) isik degisince zemini ve paneli
+                // de maviye katiyordu: sol ust paspas zeminle birlesti, kalibrasyon "kenarlar gorunmuyor" ile basarisiz oldu.
+                Cv2.InRange(hsv, new Scalar(104, 170, 50), new Scalar(130, 255, 255), mask);
                 int k = Math.Max(3, (int)Math.Round(Math.Max(w, h) / 800.0)) | 1;
                 // Acma daha genis: koyu-parlak gecislerde lensin mavi renk sacagi (kromatik sapma) birkac piksel
                 // genisliginde serit verir ve paspasa yapisir (4K'da ~8 px); paspas en az ~100 px kalinliktadir.
