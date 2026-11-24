@@ -23,6 +23,46 @@ namespace KopruKesim.Vision
             public Point2[][] Sides;
             public Point2 Center;
             public double AreaPx;
+            internal Point[] Contour;
+            internal float[] Blueness;
+            internal int W, H;
+        }
+
+        /// <summary>
+        /// Kenar noktalarini verilen (tahmini) dortgenin kenarlarina gore yeniden toplar: kontur noktalari en yakin tahmini
+        /// kenara atanir, kenardan maxDistPx'ten uzaktakiler (paspasa yapisan golge, leke) atilir, sonra mavilik
+        /// profilinde piksel alti oturtulur. quad: tahmini koseler (herhangi bir dongusel sirada); Sides[i] quad[i]..quad[i+1].
+        /// </summary>
+        public static BlueMat Resample(BlueMat mat, Point2[] quad, double maxDistPx)
+        {
+            var sides = new List<Point2>[4];
+            for (int i = 0; i < 4; i++) sides[i] = new List<Point2>();
+            foreach (Point p in mat.Contour)
+            {
+                var pt = new Point2(p.X, p.Y);
+                int best = -1; double bd = double.MaxValue, bt = 0;
+                for (int i = 0; i < 4; i++)
+                {
+                    Point2 a = quad[i], ab = quad[(i + 1) % 4] - a;
+                    double t = Point2.Dot(pt - a, ab) / Math.Max(1e-9, Point2.Dot(ab, ab));
+                    double d = Point2.Distance(pt, a + ab * Math.Max(0, Math.Min(1, t)));
+                    if (d < bd) { bd = d; best = i; bt = t; }
+                }
+                if (bd <= maxDistPx && bt > 0.1 && bt < 0.9) sides[best].Add(pt);
+            }
+            const int maxPerSide = 40;
+            var center = new Point2(quad.Average(p => p.X), quad.Average(p => p.Y));
+            var picked = new Point2[4][];
+            for (int i = 0; i < 4; i++)
+            {
+                List<Point2> s = sides[i];
+                Point2[] sel = s.Count <= maxPerSide ? s.ToArray() : Enumerable.Range(0, maxPerSide).Select(j => s[(int)((j + 0.5) * s.Count / maxPerSide)]).ToArray();
+                Point2 dir = quad[(i + 1) % 4] - quad[i];
+                var nrm = new Point2(-dir.Y, dir.X) * (1 / Math.Max(1e-9, dir.Length));
+                if (Point2.Dot(nrm, (quad[i] + quad[(i + 1) % 4]) * 0.5 - center) < 0) nrm = nrm * -1;
+                picked[i] = sel.Select(pt => RefineEdge(mat.Blueness, mat.W, mat.H, pt, nrm)).Where(pt => !double.IsNaN(pt.X)).ToArray();
+            }
+            return new BlueMat { Quad = (Point2[])quad.Clone(), Sides = picked, Center = center, AreaPx = mat.AreaPx, Contour = mat.Contour, Blueness = mat.Blueness, W = mat.W, H = mat.H };
         }
 
         private static bool Debug { get { return Environment.GetEnvironmentVariable("KK_DEBUG") == "1"; } }
@@ -105,14 +145,29 @@ namespace KopruKesim.Vision
                     Cv2.MorphologyEx(mask, mask, MorphTypes.Close, ker);       // dokunun koyu araliklari
                     Cv2.MorphologyEx(mask, mask, MorphTypes.Open, kerOpen);    // renk sacagi serit, tek tuk pikseller
                 }
+                if (Debug) mask.SaveImage(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "kk_mavi.png"));
                 Point[][] contours;
                 HierarchyIndex[] hier;
                 Cv2.FindContours(mask, out contours, out hier, RetrievalModes.External, ContourApproximationModes.ApproxNone);
                 double minArea = w * (double)h * 0.0008, maxArea = w * (double)h * 0.12;
-                foreach (Point[] c in contours)
+                var queue = new Queue<KeyValuePair<Point[], bool>>(contours.Select(c => new KeyValuePair<Point[], bool>(c, false)));
+                while (queue.Count > 0)
                 {
+                    var item = queue.Dequeue();
+                    Point[] c = item.Key;
                     double area = Cv2.ContourArea(c);
-                    if (area < minArea || area > maxArea) continue;
+                    if (area < minArea || area > maxArea * 1.5) continue;
+                    if (!item.Value)
+                    {
+                        // Once bu bolgede uc kat genis acma: paspasa yapisan kucuk lekeler, golge cikintilari ve ince
+                        // baglantilar (kablo, ekran yansimasi) kopar. Yoksa dis zarf onlari da icine alir ve dortgenin bir
+                        // kosesi oraya kayar (canli kare 2026-11-23: sag alt paspas 70 px kayik eslesiyordu). Paspas en az
+                        // ~100 px kalinlikta, acmadan etkilenmez; koseler zaten kenar dogrularinin kesisiminden.
+                        foreach (Point[] part in ReOpen(mask, c, kOpen * 3 | 1))
+                            queue.Enqueue(new KeyValuePair<Point[], bool>(part, true));
+                        continue;
+                    }
+                    if (area > maxArea) continue;
                     Point[] hull = Cv2.ConvexHull(c);
                     double solidity = area / Math.Max(1, Cv2.ContourArea(hull));
                     Point[] quad = null;
@@ -123,13 +178,36 @@ namespace KopruKesim.Vision
                         if (a.Length == 4) quad = a;
                     }
                     double fill = quad == null ? 0 : area / Math.Max(1, Cv2.ContourArea(quad));
-                    if (Debug) Console.WriteLine("mavi aday: alan {0:F0} doluluk {1:F2} dortgen {2} ({3:F2})", area, solidity, quad != null, fill);
+                    if (Debug) Console.WriteLine("mavi aday: alan {0:F0} doluluk {1:F2} dortgen {2} ({3:F2}) kutu {4}", area, solidity, quad != null, fill, Cv2.BoundingRect(c));
                     if (solidity < 0.85 || quad == null || fill < 0.85) continue;
                     BlueMat mat = Build(c, quad, area, blueness, w, h);
                     if (mat != null) found.Add(mat);
                 }
             }
             return found.OrderByDescending(m => m.AreaPx).ToList();
+        }
+
+        /// <summary>Konturun kutusunda maskeyi genis cekirdekle acar; kalan parcalarin konturlari (tam goruntu koordinatinda).</summary>
+        private static List<Point[]> ReOpen(Mat mask, Point[] contour, int kernel)
+        {
+            var res = new List<Point[]>();
+            Rect box = Cv2.BoundingRect(contour);
+            box = new Rect(Math.Max(0, box.X - 2), Math.Max(0, box.Y - 2), 0, 0)
+            {
+                Width = Math.Min(mask.Cols, box.Right + 2) - Math.Max(0, box.X - 2),
+                Height = Math.Min(mask.Rows, box.Bottom + 2) - Math.Max(0, box.Y - 2)
+            };
+            using (var roi = new Mat(box.Height, box.Width, MatType.CV_8UC1, Scalar.All(0)))
+            using (var ker = Cv2.GetStructuringElement(MorphShapes.Ellipse, new Size(kernel, kernel)))
+            {
+                // Yalniz bu konturun ici (komsu adaylar karismasin)
+                Cv2.DrawContours(roi, new[] { contour.Select(p => new Point(p.X - box.X, p.Y - box.Y)).ToArray() }, 0, Scalar.All(255), -1);
+                using (var src = new Mat(mask, box)) Cv2.BitwiseAnd(roi, src, roi);
+                Cv2.MorphologyEx(roi, roi, MorphTypes.Open, ker);
+                Cv2.FindContours(roi, out Point[][] parts, out _, RetrievalModes.External, ContourApproximationModes.ApproxNone);
+                foreach (Point[] p in parts) res.Add(p.Select(q => new Point(q.X + box.X, q.Y + box.Y)).ToArray());
+            }
+            return res;
         }
 
         private static BlueMat Build(Point[] contour, Point[] quad, double area, float[] blueness, int w, int h)
@@ -173,7 +251,8 @@ namespace KopruKesim.Vision
                 Quad = q,
                 Sides = picked,
                 Center = new Point2(q.Average(p => p.X), q.Average(p => p.Y)),
-                AreaPx = area
+                AreaPx = area,
+                Contour = contour, Blueness = blueness, W = w, H = h
             };
         }
 
@@ -183,7 +262,8 @@ namespace KopruKesim.Vision
         /// </summary>
         private static Point2 RefineEdge(float[] img, int w, int h, Point2 p, Point2 n)
         {
-            const double reach = 8, step = 0.25;
+            // 16 px: koyu zemine bakan kenarda mavimsi golge maskeye karisip konturu 10 px'e kadar disari itebiliyor
+            const double reach = 16, step = 0.25;
             int count = (int)(2 * reach / step) + 1;
             var v = new double[count];
             for (int k = 0; k < count; k++)

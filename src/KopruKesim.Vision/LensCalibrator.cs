@@ -462,7 +462,7 @@ namespace KopruKesim.Vision
         }
 
         /// <summary>Aykiri noktalari (3 x MAD ustu) iki turda atarak dogru oturtur. Donen dizi butun noktalarin sapmasi.</summary>
-        private static double[] RobustLine(Point2[] pts, out Point2 normal, out double offset, out bool[] kept)
+        internal static double[] RobustLine(Point2[] pts, out Point2 normal, out double offset, out bool[] kept)
         {
             kept = Enumerable.Repeat(true, pts.Length).ToArray();
             double[] dev = PlanarBundle.FitLine(pts, out normal, out offset);
@@ -569,8 +569,12 @@ namespace KopruKesim.Vision
         }
 
         /// <summary>Goruntu noktalarinin tabla duzlemindeki yeri (mm): bukulme giderilir, isin tabla duzlemiyle kesisimi.</summary>
-        public static Point2[] ImageToTable(LensCalibration cal, Point2[] image)
+        public static Point2[] ImageToTable(LensCalibration cal, Point2[] image) => ImageToTable(cal, image, 0);
+
+        /// <summary>Goruntu noktalarinin tabla yuzeyinden zMm yukaridaki duzlemdeki yeri (X, Y mm).</summary>
+        public static Point2[] ImageToTable(LensCalibration cal, Point2[] image, double zMm)
         {
+            double zp = zMm * CameraSideSign(cal);
             double[] r = cal.Rotation();
             // Kamera merkezi C = -R^T t (tabla koordinatinda)
             double cx = -(r[0] * cal.Tvec[0] + r[3] * cal.Tvec[1] + r[6] * cal.Tvec[2]);
@@ -582,7 +586,7 @@ namespace KopruKesim.Vision
                 Point2 q = Undistort(cal, image[i]);
                 // Kamera isini (x, y, 1) tabla koordinatina: d = R^T (x, y, 1); tabla duzlemi (Z = 0) ile kesisim
                 double dx = r[0] * q.X + r[3] * q.Y + r[6], dy = r[1] * q.X + r[4] * q.Y + r[7], dz = r[2] * q.X + r[5] * q.Y + r[8];
-                double s = Math.Abs(dz) < 1e-12 ? double.NaN : -cz / dz;
+                double s = Math.Abs(dz) < 1e-12 ? double.NaN : (zp - cz) / dz;
                 res[i] = new Point2(cx + s * dx, cy + s * dy);
             }
             return res;
@@ -617,8 +621,15 @@ namespace KopruKesim.Vision
         }
 
         /// <summary>Tabla noktalarinin (mm, Z = 0) goruntudeki yeri (piksel), bukulme dahil.</summary>
-        public static Point2[] TableToImage(LensCalibration cal, Point2[] table)
+        public static Point2[] TableToImage(LensCalibration cal, Point2[] table) => TableToImage(cal, table, 0);
+
+        /// <summary>
+        /// Tabla yuzeyinden zMm yukaridaki noktalarin (tabla X, Y mm) goruntudeki yeri. Yukari = kameraya dogru
+        /// (kalibrasyonda tabla Z ekseninin isareti kameranin hangi tarafta olduguna gore secilir).
+        /// </summary>
+        public static Point2[] TableToImage(LensCalibration cal, Point2[] table, double zMm)
         {
+            double z = zMm * CameraSideSign(cal);
             using (var obj = new Mat(table.Length, 1, MatType.CV_64FC3))
             using (var img = new Mat())
             using (var k = CameraMatrix(cal))
@@ -626,7 +637,7 @@ namespace KopruKesim.Vision
             using (var rv = new Mat(3, 1, MatType.CV_64FC1))
             using (var tv = new Mat(3, 1, MatType.CV_64FC1))
             {
-                for (int i = 0; i < table.Length; i++) obj.Set(i, 0, new Vec3d(table[i].X, table[i].Y, 0));
+                for (int i = 0; i < table.Length; i++) obj.Set(i, 0, new Vec3d(table[i].X, table[i].Y, z));
                 for (int i = 0; i < 3; i++) { rv.Set(i, 0, cal.Rvec[i]); tv.Set(i, 0, cal.Tvec[i]); }
                 Cv2.ProjectPoints(obj, rv, tv, k, d, img);
                 var res = new Point2[table.Length];
@@ -678,7 +689,52 @@ namespace KopruKesim.Vision
             }
         }
 
-        private static Mat CameraMatrix(LensCalibration cal)
+        /// <summary>Kameranin tabla Z ekseninin hangi yonunde oldugu (+1 ya da -1).</summary>
+        public static double CameraSideSign(LensCalibration cal)
+        {
+            double[] r = cal.Rotation();
+            double cz = -(r[2] * cal.Tvec[0] + r[5] * cal.Tvec[1] + r[8] * cal.Tvec[2]);
+            return cz < 0 ? -1 : 1;
+        }
+
+        private static readonly object DisplayLock = new object();
+        private static LensCalibration _dispCal;
+        private static string _dispKey;
+        private static Mat _dispX, _dispY;
+
+        /// <summary>
+        /// Gosterim ve kayit icin ustten gorunum: tabla X 0..lengthMm, Y 0..widthMm, k piksel/mm (k = 1 ise 1 piksel =
+        /// 1 mm), orijin sol altta. Goruntu tabla yuzeyinden zMm yukaridaki duzlemde duzeltilir: zMm = parca kalinligi
+        /// verilirse plakanin ust yuzeyinin kenarlari gercek X, Y yerinde gorunur ve olculen koselerle cakisir
+        /// (tabla yuzeyindeki seyler ise kameradan uzaklastikca biraz kayar). Haritalar ayni ayarlar icin bellekte tutulur.
+        /// </summary>
+        public static Mat TopViewAt(Mat frame, LensCalibration cal, double lengthMm, double widthMm, double k, double zMm)
+        {
+            int cw = (int)Math.Round(lengthMm * k), ch = (int)Math.Round(widthMm * k);
+            string key = string.Join("/", lengthMm.ToString("R"), widthMm.ToString("R"), k.ToString("R"), zMm.ToString("R"));
+            lock (DisplayLock)
+            {
+                if (!ReferenceEquals(_dispCal, cal) || _dispKey != key || _dispX == null)
+                {
+                    _dispX?.Dispose(); _dispY?.Dispose();
+                    var pts = new Point2[cw * ch];
+                    for (int v = 0; v < ch; v++)
+                        for (int u = 0; u < cw; u++)
+                            pts[v * cw + u] = new Point2((u + 0.5) / k, widthMm - (v + 0.5) / k);
+                    Point2[] img = TableToImage(cal, pts, zMm);
+                    var mx = new float[cw * ch]; var my = new float[cw * ch];
+                    for (int i = 0; i < mx.Length; i++) { mx[i] = (float)img[i].X; my[i] = (float)img[i].Y; }
+                    _dispX = new Mat(ch, cw, MatType.CV_32FC1); _dispY = new Mat(ch, cw, MatType.CV_32FC1);
+                    _dispX.SetArray(mx); _dispY.SetArray(my);
+                    _dispCal = cal; _dispKey = key;
+                }
+                var top = new Mat();
+                Cv2.Remap(frame, top, _dispX, _dispY, InterpolationFlags.Linear, BorderTypes.Constant, Scalar.All(0));
+                return top;
+            }
+        }
+
+        internal static Mat CameraMatrix(LensCalibration cal)
         {
             var k = new Mat(3, 3, MatType.CV_64FC1, Scalar.All(0));
             k.Set(0, 0, cal.Fx); k.Set(1, 1, cal.Fy); k.Set(0, 2, cal.Cx); k.Set(1, 2, cal.Cy); k.Set(2, 2, 1.0);

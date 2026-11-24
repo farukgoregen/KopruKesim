@@ -76,6 +76,8 @@ app.UseStaticFiles();
 var inv = CultureInfo.InvariantCulture;
 var gate = new object();
 string dataDir = @"D:\SMO\photos";
+// Olcum goruntusu (ekran ve olcumler klasoru): tablanin 3300 x 2000 mm'lik alani, 1 piksel = 1 mm
+const double DisplayLengthMm = 3300, DisplayWidthMm = 2000;
 Directory.CreateDirectory(dataDir);
 
 IResult Fail(string message) => Results.Json(new { hata = message }, statusCode: 400);
@@ -283,7 +285,9 @@ app.MapGet("/api/kalibrasyon/incele", () =>
         Point2[] pixels, table;
         int[] slots;
         string pointError;
-        if (cal.CornerSource == LensCalibration.CornerSourceMats)
+        bool matsOnly = cal.TagType == "paspas";   // yalniz paspasli kalibrasyon: eslestirilecek dama yok
+        if (matsOnly) { pointError = "paspas"; pixels = null; table = null; slots = null; }
+        else if (cal.CornerSource == LensCalibration.CornerSourceMats)
             pointError = LensCalibrator.MatchSavedBoards(frame, cal, tag, out pixels, out table, out slots);
         else
         {
@@ -325,7 +329,7 @@ app.MapGet("/api/kalibrasyon/incele", () =>
                 tabla = cal.PaperCorners.Select(ValidPoint)
             },
             damalar = boards,
-            noktaUyarisi = pointError == null ? null : "Kayıtlı karede dama noktaları yeniden eşleştirilemedi. Görüntüler mevcut kalibrasyon modeliyle gösteriliyor."
+            noktaUyarisi = pointError == null || matsOnly ? null : "Kayıtlı karede dama noktaları yeniden eşleştirilemedi. Görüntüler mevcut kalibrasyon modeliyle gösteriliyor."
         });
     }
 });
@@ -335,6 +339,10 @@ app.MapPost("/api/kalibrasyon", async (HttpRequest req) =>
     IFormCollection form = await req.ReadFormAsync();
     byte[] bytes = await ReadFile(form);
     if (bytes == null) return Fail("Fotoğraf gelmedi.");
+    double Num(string key) => double.TryParse(form[key].ToString().Replace(',', '.'), NumberStyles.Float, inv, out double v) && double.IsFinite(v) ? v : double.NaN;
+    // Yalniz dort mavi paspasla kalibrasyon (dama yok): tablanin dort kenari ayri ayri girilir
+    if (form.ContainsKey("alt")) return CalibrateWithMats(bytes, new TableSides { Bottom = Num("alt"), Top = Num("ust"), Left = Num("sol"), Right = Num("sag"), Diagonal = Num("kosegen") },
+        new MatSpec { LongMm = Num("paspasUzun"), ShortMm = Num("paspasKisa"), ThicknessMm = Num("paspasKalinlik") });
     double length = double.TryParse(form["uzunluk"], NumberStyles.Float, inv, out double l) && l > 0 ? l : 0;
     double width = double.TryParse(form["genislik"], NumberStyles.Float, inv, out double w) && w > 0 ? w : 0;
     if (!double.IsFinite(length) || !double.IsFinite(width) || length <= 0 || width <= 0)
@@ -418,6 +426,7 @@ app.MapPost("/api/kalibrasyon", async (HttpRequest req) =>
         if (best.Calibration.CornerSource == LensCalibration.CornerSourcePaper && measuredCenters == null)
             best.Calibration.Save(cameraLensPath);
         File.WriteAllBytes(calibrationPhotoPath, bytes);
+        SaveCalibrationTopView(frame, best.Calibration);
         // Yeni kalibrasyon: kamera oynamis olabilir, eski bos tabla fotografi artik ayni goruntuyu vermez
         if (File.Exists(emptyPath)) File.Delete(emptyPath);
         LensCalibration saved = LoadLens();
@@ -452,6 +461,79 @@ app.MapPost("/api/kalibrasyon", async (HttpRequest req) =>
         return Results.Json(new { kalibrasyon = LensStatus(saved), etiketHatasiMm = best.TagErrorMm.Select(e => double.IsFinite(e) ? (double?)Math.Round(e, 2) : null), uyarilar });
     }
 });
+
+// Kalibrasyonun duzeltilmis (ustten) goruntusu: kalibrasyon\ustten.jpg, olcum goruntusuyle ayni alan ve olcek
+// (3300 x 2000 mm, 1 piksel = 1 mm, sol alt 0,0), tabla yuzeyi duzleminde. Disk doluysa kalibrasyonu bozmaz.
+void SaveCalibrationTopView(Mat frame, LensCalibration cal)
+{
+    try
+    {
+        using Mat top = LensCalibrator.TopViewAt(frame, cal, DisplayLengthMm, DisplayWidthMm, 1.0, 0);
+        File.WriteAllBytes(Path.Combine(lensDir, "ustten.jpg"), top.ToBytes(".jpg", new ImageEncodingParam(ImwriteFlags.JpegQuality, 90)));
+    }
+    catch (IOException) { }
+}
+
+// Paspasli kalibrasyon: dort mavi paspas tablanin koselerinde (dis kosesi tabla kosesi), tabla kenarlari seritle olculmus.
+// Lens kameranin kayitli lens bilgisinden (son 6 damali kalibrasyon) alinir; fotograftan kameranin konumu cozulur.
+IResult CalibrateWithMats(byte[] bytes, TableSides sides, MatSpec spec)
+{
+    foreach (var (v, name) in new[] { (sides.Bottom, "alt"), (sides.Top, "üst"), (sides.Left, "sol"), (sides.Right, "sağ") })
+        if (double.IsNaN(v) || v < 500 || v > 10000) return Fail($"Tablanın {name} kenarını mm olarak girin (paspasların dış köşeleri arası).");
+    if (!double.IsNaN(sides.Diagonal) && sides.Diagonal <= 0) sides.Diagonal = double.NaN;
+    if (double.IsNaN(spec.LongMm) || spec.LongMm < 50 || double.IsNaN(spec.ShortMm) || spec.ShortMm < 30 || spec.ShortMm >= spec.LongMm)
+        return Fail("Paspasın uzun ve kısa kenarını mm olarak girin.");
+    if (double.IsNaN(spec.ThicknessMm) || spec.ThicknessMm < 0) spec.ThicknessMm = 0;
+    lock (gate)
+    {
+        using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
+        if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
+        Directory.CreateDirectory(lensDir);
+        // Son deneme her durumda saklanir (basarisiz kalibrasyonu sonradan incelemek icin)
+        File.WriteAllBytes(Path.Combine(lensDir, "son-deneme.jpg"), bytes);
+        // Lens: kameranin kayitli lensi; konum tahmini (paspaslari fotografta aramak icin) son kalibrasyondan
+        LensCalibration camLens = LoadCameraLens(), current = LoadLens();
+        bool Fits(LensCalibration c) => c != null && c.ImageWidth == frame.Cols && c.ImageHeight == frame.Rows;
+        LensCalibration source = Fits(camLens) ? camLens : Fits(current) ? current : null;
+        if (source == null)
+            return Fail($"Bu kamera için {frame.Cols}x{frame.Rows} çözünürlükte kayıtlı lens bilgisi yok. Lens bükülmesi paspaslardan çözülemez; bir kez altı damalı kalibrasyon gerekir.");
+        var prior = new LensCalibration
+        {
+            ImageWidth = source.ImageWidth, ImageHeight = source.ImageHeight, Fx = source.Fx, Fy = source.Fy, Cx = source.Cx, Cy = source.Cy,
+            Distortion = (double[])source.Distortion.Clone(),
+            Rvec = (double[])(Fits(current) ? current : source).Rvec.Clone(), Tvec = (double[])(Fits(current) ? current : source).Tvec.Clone(),
+            // Kamera konumu bu kalibrasyondan alinir: dogrulugu da ondan
+            MeanMm = (Fits(current) ? current : source).MeanMm, MaxMm = (Fits(current) ? current : source).MaxMm, Points = (Fits(current) ? current : source).Points
+        };
+        MatCalibrator.Result r = MatCalibrator.Calibrate(frame, sides, spec, prior);
+        if (r.Calibration == null) return Fail(r.Error + " Fotoğraf incelenmek üzere kaydedildi (kalibrasyon\\son-deneme.jpg).");
+        LensCalibration cal = r.Calibration;
+        cal.Save(lensPath);
+        File.WriteAllBytes(calibrationPhotoPath, bytes);
+        SaveCalibrationTopView(frame, cal);
+        if (File.Exists(emptyPath)) File.Delete(emptyPath);   // kamera oynamis olabilir: bos tabla yeniden kaydedilmeli
+        LensCalibration saved = LoadLens();
+        var uyarilar = new List<string>();
+        string[] names = { "sol üst", "sağ üst", "sol alt", "sağ alt" };
+        if (r.UsedPriorPose)
+        {
+            Point2[] pc = r.PhotoCorners;
+            if (r.MatErrorMm.Max() > 10)
+                uyarilar.Add($"Paspas köşelerinden ölçülen tabla girilen kenarlardan farklı (köşe başına {string.Join(", ", r.MatErrorMm.Select((e, i) => $"{names[i]} {e:F0}"))} mm): "
+                    + $"fotoğrafa göre alt {Point2.Distance(pc[2], pc[3]):F0}, üst {Point2.Distance(pc[0], pc[1]):F0}, sol {Point2.Distance(pc[2], pc[0]):F0}, sağ {Point2.Distance(pc[3], pc[1]):F0} mm, "
+                    + $"köşegenler {Point2.Distance(pc[2], pc[1]):F0} / {Point2.Distance(pc[3], pc[0]):F0} mm. Tabla köşeleri paspaslardan alındı; parça ölçüleri bundan etkilenmez. "
+                    + "Fark büyükse paspasların köşeye tam oturduğunu kontrol edin ya da köşegeni ölçüp girin.");
+        }
+        else if (!saved.MeetsReferenceTolerance)
+            uyarilar.Add($"Paspas köşeleri modele {saved.MaxMm:F1} mm'ye kadar uymuyor (sınır {LensCalibration.MaxReferenceErrorMm:F0} mm; paspas başına "
+                + string.Join(", ", r.MatErrorMm.Select((e, i) => $"{names[i]} {e:F1}")) + " mm). Ölçüler önizleme sayılır. "
+                + "Hatası büyük paspasın tabla köşesine tam oturduğunu, paspas ölçüsünü ve tabla kenar uzunluklarını kontrol edin.");
+        if (double.IsFinite(saved.EdgeRmsMm) && saved.EdgeRmsMm > 2.5)
+            uyarilar.Add($"Mavi paspasların kenarları düz görünmüyor (sapma {saved.EdgeRmsMm:F1} mm). Paspaslar tablaya düz yatmalı ve kıvrık olmamalı.");
+        uyarilar.Add("Kalibrasyon kaydedildi. Şimdi boş tablayı (paspaslar yerinde, başka bir şey yokken) bir kez kaydedin.");
+        return Results.Json(new { kalibrasyon = LensStatus(saved), paspasHatasiMm = r.MatErrorMm.Select(e => Math.Round(e, 2)), uyarilar });
+    }
+}
 
 // Bos tabla fotografi: kalibrasyondan sonra, damalar kaldirilinca ayni kameradan. Olcumde yalniz bos tabladan
 // farkli yerler parca sayilir (ahsaptaki lekeler, cita aralari, delikler karismaz).
@@ -680,7 +762,8 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             : "Kamera kalibrasyonu yapılmamış. Önce 6 kalibrasyon etiketli bir fotoğrafla kalibrasyon yapın.");
         double formLength = lensCal.TableLengthMm, formWidth = lensCal.TableWidthMm;   // tabla olcusu kalibrasyondan
         // Damali kalibrasyonda dama yerleri olcumden cikarilir (damalar tablada unutulduysa parca sanilmasin)
-        MarkerLayout layout = cornerMode ? null : LensCalibrator.TagLayout(formLength, formWidth, LensTag(lensCal.TagType), TagCentersForMasking(lensCal));
+        // Paspasli kalibrasyonda tablada dama yok: hicbir alan olcumden cikarilmaz
+        MarkerLayout layout = cornerMode || lensCal.TagType == "paspas" ? null : LensCalibrator.TagLayout(formLength, formWidth, LensTag(lensCal.TagType), TagCentersForMasking(lensCal));
         using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
         if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
 
@@ -698,7 +781,7 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
         using MeasureOutput result = RunLens(frame, lensCal, layout, options, thickness, cornerMode ? cornerEmptyPath : emptyPath);
         if (result.Error != null)
         {
-            SaveMeasurement(bytes, thickness, formLength, formWidth, result, new List<string>(), method);   // basarisiz olcum de incelensin
+            SaveMeasurement(bytes, null, thickness, formLength, formWidth, result, new List<string>(), method);   // basarisiz olcum de incelensin
             return Results.Json(new { hata = TurkceHata(result.Error) }, statusCode: 400);
         }
         var uyarilar = new List<string>();
@@ -710,9 +793,13 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
         if (!result.UsedReference)
             uyarilar.Add(cornerMode ? "Boş tabla fotoğrafı kayıtlı değil: tablanın üzerindeki lekeler, çizikler ya da çıta araları parça sanılabilir. Damasız kalibrasyon bölümünden boş tablayı bir kez kaydedin."
                 : "Boş tabla fotoğrafı kayıtlı değil: tablanın üzerindeki lekeler, çizikler ya da çıta araları parça sanılabilir. Damaları kaldırdıktan sonra Kamera kalibrasyonu bölümünden boş tablayı bir kez kaydedin.");
-        string logId = SaveMeasurement(bytes, thickness, formLength, formWidth, result, uyarilar, method, calibrationTrusted);
+        // Gosterim ve kayit goruntusu: 1 piksel = 1 mm, DisplayLengthMm x DisplayWidthMm, plakanin ust yuzeyi
+        // yuksekliginde duzeltilir; boylece kalinlik ne olursa olsun cizilen koseler plakanin gorunen kenarinda durur.
+        using Mat display = LensCalibrator.TopViewAt(frame, lensCal, DisplayLengthMm, DisplayWidthMm, 1.0, thickness);
+        byte[] displayJpg = display.ToBytes(".jpg", new ImageEncodingParam(ImwriteFlags.JpegQuality, 90));
+        string logId = SaveMeasurement(bytes, displayJpg, thickness, formLength, formWidth, result, uyarilar, method, calibrationTrusted);
         TableCalibration used = result.Calibration;
-        string image = "data:image/jpeg;base64," + Convert.ToBase64String(result.Rectified.ToBytes(".jpg"));
+        string image = "data:image/jpeg;base64," + Convert.ToBase64String(displayJpg);
         return Results.Json(new
         {
             tabla = new { uzunluk = used.TableLengthMm, genislik = used.TableWidthMm },
@@ -727,6 +814,8 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             koseKaynagi = cornerMode ? "kalibrasyon-damasiz" : "kalibrasyon",
             kayit = logId,
             goruntu = image,
+            // Goruntunun kapsadigi alan (mm, sol alt 0,0); 1 piksel = 1 mm
+            goruntuAlani = new { uzunluk = DisplayLengthMm, genislik = DisplayWidthMm },
             parcalar = result.Slabs.Select(s => new
             {
                 sekil = s.Shape.ToString(),
@@ -744,15 +833,18 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
 });
 
 // Olcum kaydi: her olcumun fotografi ve sonucu D:\SMO\photos\olcumler altinda saklanir (git disi, yalniz bu bilgisayarda).
-// Sapan olcumleri sonradan inceleyebilmek icin. En fazla 300 olcum tutulur; eskileri silinir.
-string SaveMeasurement(byte[] photo, double thicknessMm, double lengthMm, double widthMm, MeasureOutput r, List<string> warnings, string method, bool calibrationTrusted = true)
+// Sapan olcumleri sonradan inceleyebilmek icin. <id>.jpg duzeltilmis ustten gorunum (1 piksel = 1 mm), ham kamera
+// fotografi ham\<id>.jpg (yeniden olcmek icin). En fazla 300 olcum tutulur; eskileri silinir.
+string SaveMeasurement(byte[] photo, byte[] displayJpg, double thicknessMm, double lengthMm, double widthMm, MeasureOutput r, List<string> warnings, string method, bool calibrationTrusted = true)
 {
     try
     {
         string dir = Path.Combine(dataDir, "olcumler");
-        Directory.CreateDirectory(dir);
+        string rawDir = Path.Combine(dir, "ham");
+        Directory.CreateDirectory(rawDir);
         string id = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
-        File.WriteAllBytes(Path.Combine(dir, id + ".jpg"), photo);
+        File.WriteAllBytes(Path.Combine(rawDir, id + ".jpg"), photo);
+        if (displayJpg != null) File.WriteAllBytes(Path.Combine(dir, id + ".jpg"), displayJpg);
         var c = r.Calibration;
         var info = new
         {
@@ -762,19 +854,18 @@ string SaveMeasurement(byte[] photo, double thicknessMm, double lengthMm, double
             istenenTabla = new { uzunluk = lengthMm, genislik = widthMm },
             yontem = method,
             goruntu = c == null ? null : new { w = c.ImageWidth, h = c.ImageHeight },
+            kayitGoruntusu = displayJpg == null ? null : new { uzunlukMm = DisplayLengthMm, genislikMm = DisplayWidthMm, pikselMm = 1.0, duzlemYuksekligiMm = thicknessMm },
             uyarilar = warnings,
             hata = r.Error,
             parcalar = r.Slabs.Select(s => new { s.Method, IsReliable = calibrationTrusted && s.IsReliable, kenarlar = s.EdgeLengths, koseler = s.Vertices.Select(P) })
         };
         File.WriteAllText(Path.Combine(dir, id + ".json"), System.Text.Json.JsonSerializer.Serialize(info, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-        // Eski iki fotografli olcumlerin "_2.jpg" dosyalari da kendi olcumleriyle birlikte silinir
-        foreach (string old in Directory.GetFiles(dir, "*.jpg").Where(f => !f.EndsWith("_2.jpg")).OrderByDescending(f => f).Skip(300))
+        // Her olcumun JSON'u var: en eskiler kendi fotograflariyla (duzeltilmis, ham, eski "_2.jpg") birlikte silinir
+        foreach (string old in Directory.GetFiles(dir, "*.json").OrderByDescending(f => f).Skip(300))
         {
-            File.Delete(old);
-            string js = Path.ChangeExtension(old, ".json");
-            if (File.Exists(js)) File.Delete(js);
-            string p2 = Path.Combine(Path.GetDirectoryName(old), Path.GetFileNameWithoutExtension(old) + "_2.jpg");
-            if (File.Exists(p2)) File.Delete(p2);
+            string name = Path.GetFileNameWithoutExtension(old);
+            foreach (string f in new[] { old, Path.Combine(dir, name + ".jpg"), Path.Combine(dir, name + "_2.jpg"), Path.Combine(rawDir, name + ".jpg") })
+                if (File.Exists(f)) File.Delete(f);
         }
         return id;
     }

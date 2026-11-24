@@ -111,6 +111,8 @@ namespace KopruKesim.Vision
                     // Tablanin kenarina dayanan parcanin kenari orijinal fotografta aranir (tablanin disi da gorunur)
                     detector.PhotoSampler = pts => BorderEdgeFinder.SamplePhoto(frame, lens, pts);
                     output.Slabs = detector.Detect(canvas);
+                    // Kenarlar plakanin ust yuzeyinin bittigi yere (yan yuz ve golge disarida kalir)
+                    TopFaceSnapper.Snap(output.Slabs, pts => BorderEdgeFinder.SamplePhoto(frame, lens, pts, thicknessMm), options.Locator);
                 }
             }
             finally { options.PxPerMm = oldScale; }

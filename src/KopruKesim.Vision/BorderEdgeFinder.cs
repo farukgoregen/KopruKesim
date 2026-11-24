@@ -278,7 +278,7 @@ namespace KopruKesim.Vision
         }
 
         /// <summary>Noktalara aykirilari atarak (8 mm, sonra 3 mm) cizgi oturtur; noktalarin yarisi cizgide kalmali.</summary>
-        private static bool FitRobust(List<Point2> found, int n, Point2 dir, out Point2 lineP, out Point2 lineD, out string why)
+        internal static bool FitRobust(List<Point2> found, int n, Point2 dir, out Point2 lineP, out Point2 lineD, out string why)
         {
             why = null;
             List<Point2> cur = found;
@@ -309,7 +309,7 @@ namespace KopruKesim.Vision
             d = new Point2(Math.Cos(ang), Math.Sin(ang));
         }
 
-        private static double[][] ToLab(Vec3b[] bgr)
+        internal static double[][] ToLab(Vec3b[] bgr)
         {
             var res = new double[bgr.Length][];
             using (var m = new Mat(1, bgr.Length, MatType.CV_8UC3))
@@ -324,7 +324,7 @@ namespace KopruKesim.Vision
             return res;
         }
 
-        private static double Median(List<double> v)
+        internal static double Median(List<double> v)
         {
             if (v.Count == 0) return 0;
             var s = v.OrderBy(x => x).ToList();
@@ -332,9 +332,12 @@ namespace KopruKesim.Vision
         }
 
         /// <summary>Orijinal fotograftan tabla mm noktalarinin rengi (iki dogrusal ara deger; fotograf disi siyah).</summary>
-        public static Vec3b[] SamplePhoto(Mat frame, LensCalibration lens, Point2[] tableMm)
+        public static Vec3b[] SamplePhoto(Mat frame, LensCalibration lens, Point2[] tableMm) => SamplePhoto(frame, lens, tableMm, 0);
+
+        /// <summary>Tabla yuzeyinden zMm yukaridaki duzlemde (ornegin plakanin ust yuzeyi) noktalarin fotograftaki rengi.</summary>
+        public static Vec3b[] SamplePhoto(Mat frame, LensCalibration lens, Point2[] tableMm, double zMm)
         {
-            Point2[] img = LensCalibrator.TableToImage(lens, tableMm);
+            Point2[] img = LensCalibrator.TableToImage(lens, tableMm, zMm);
             var res = new Vec3b[tableMm.Length];
             var idx = frame.GetGenericIndexer<Vec3b>();
             int w = frame.Cols, h = frame.Rows;

@@ -324,7 +324,27 @@
 
     <div class="grup" id="kalibrasyonGrup" hidden>
       <h2>Kamera kalibrasyonu</h2>
-      <p class="ipucu-kucuk">Sabit kamera için bir kez yapılır. Kalibrasyon damasını (10 × 7 kare, 25 mm, A4 yatay) dört köşeye ve iki uzun kenarın tam ortasına koyun: sayfanın uzun kenarı tablanın uzun kenarı boyunca, kenarları tablaya dayalı. Tablanın ölçüsünü yukarıya girin ve fotoğrafı çekin; program lens bükülmesini ve kameranın yerini hesaplar. Sonraki her ölçüm bu kalibrasyonla düzeltilir. Kamera oynarsa ya da odak değişirse yeniden yapın.</p>
+      <p class="ipucu-kucuk">Sabit kamera için bir kez yapılır, dama gerekmez. Dört mavi paspas tablanın köşelerinde olmalı: dış köşesi tabla köşesine tam oturur, uzun kenarı tablanın uzun kenarı boyunca. Tablanın dört kenarını (paspasların dış köşeleri arası) şeritle ölçüp aşağıya girin, tabla boşken fotoğrafı çekin. Sol alt paspasın dış köşesi (0,0), X ekseni sağ alt paspasa doğru. Lens bükülmesi kameranın kayıtlı lens bilgisinden alınır. Kamera oynarsa yeniden yapın.</p>
+      <div class="satir">
+        <label class="alan">Alt kenar (mm)<input id="kalAlt" type="number" min="500" step="0.5" value="3296" inputmode="decimal"></label>
+        <label class="alan">Üst kenar (mm)<input id="kalUst" type="number" min="500" step="0.5" value="3300" inputmode="decimal"></label>
+      </div>
+      <div class="satir">
+        <label class="alan">Sol kenar (mm)<input id="kalSol" type="number" min="500" step="0.5" value="1991" inputmode="decimal"></label>
+        <label class="alan">Sağ kenar (mm)<input id="kalSag" type="number" min="500" step="0.5" value="1988" inputmode="decimal"></label>
+      </div>
+      <div class="satir">
+        <label class="alan">Köşegen, sol alt → sağ üst (mm, isteğe bağlı)<input id="kalKosegen" type="number" min="500" step="0.5" placeholder="boş: sol alt köşe dik" inputmode="decimal"></label>
+      </div>
+      <div class="satir">
+        <label class="alan">Paspas uzun (mm)<input id="kalPaspasUzun" type="number" min="50" step="1" value="435" inputmode="decimal"></label>
+        <label class="alan">Paspas kısa (mm)<input id="kalPaspasKisa" type="number" min="30" step="1" value="150" inputmode="decimal"></label>
+        <label class="alan">Paspas kalınlık (mm)<input id="kalPaspasKalinlik" type="number" min="0" step="0.5" value="4.5" inputmode="decimal"></label>
+      </div>
+      <p class="ipucu-kucuk">Dört kenar tablanın şeklini tam belirlemez; köşegen girilmezse sol alt köşe dik kabul edilir.</p>
+      <details>
+      <summary>Damalı kalibrasyon (eski yöntem; yalnız lens bilgisi yoksa)</summary>
+      <label class="onay"><input type="checkbox" id="kalDamali"><span>Damalı kalibrasyon kullan<small>Tabla ölçüsü yukarıdaki uzunluk ve genişlikten alınır.</small></span></label>
       <div class="satir">
         <label class="alan">Etiket
           <select id="kalEtiket" aria-describedby="kalKareIpucu"><option value="normal" selected>10 × 7 kare, 25 mm (kalibrasyon-damasi.pdf)</option><option value="buyuk">Büyük desen, 38 mm</option><option value="kucuk">Küçük desen, 30 mm</option><option value="otomatik">Otomatik algıla</option></select>
@@ -339,6 +359,7 @@
           <textarea id="kalDamaMerkezleri" rows="6" spellcheck="false" aria-describedby="kalDamaMerkezIpucu"></textarea>
         </label>
         <p class="ipucu-kucuk" id="kalDamaMerkezIpucu">Sol alt tabla köşesi (0,0). X sağa, Y yukarı. Desenin ortasını ölçün ve her satıra bir X;Y çifti girin. Sıra: sol üst, üst orta, sağ üst, sol alt, alt orta, sağ alt. Damaları tabla eksenlerine paralel tutun. Normalde boş bırakın: girilirse tabla çerçevesi kâğıt köşeleri yerine bu merkezlerden kurulur.</p>
+      </details>
       </details>
       <div class="satir" style="margin-top: 8px">
         <button type="button" class="dugme ikincil" id="kalYukle">Kalibrasyon fotoğrafı yükle</button>
@@ -707,7 +728,9 @@
     const sol = b * 7, alt = b * 5.5, ust = b * 2, sag = b * 2.5;
     const Y = y => W - y;                                 // tabla Y yukari, svg asagi
     const svg = el("svg", { viewBox: `${-sol} ${-ust} ${L + sol + sag} ${W + ust + alt}`, role: "group", "aria-label": "Tablanın üstten görünümü ve ölçülen parçalar" });
-    svg.append(el("image", { href: sonOlcum.goruntu, x: 0, y: 0, width: L, height: W, preserveAspectRatio: "none" }));
+    // Goruntu 1 piksel = 1 mm, kapsadigi alan goruntuAlani (sol alt 0,0); eski yanitlarda tabla olcusune gerilir
+    const GL = sonOlcum.goruntuAlani ? sonOlcum.goruntuAlani.uzunluk : L, GW = sonOlcum.goruntuAlani ? sonOlcum.goruntuAlani.genislik : W;
+    svg.append(el("image", { href: sonOlcum.goruntu, x: 0, y: Y(GW), width: GL, height: GW, preserveAspectRatio: "none" }));
     svg.append(el("rect", { x: 0, y: 0, width: L, height: W, fill: "none", stroke: "var(--murekkep)", "stroke-width": b * 0.15 }));
 
     // Cetveller: 100 mm cizgi, 500 mm yazi
@@ -1038,7 +1061,7 @@
   window.addEventListener("resize", yerlestirSvg);
 
   // Tabla olcusu ve tercihler tarayicida hatirlanir (masa ya da ahsap tabla bir kez girilir)
-  const AYAR = ["uzunluk", "genislik", "tekrenk"];
+  const AYAR = ["uzunluk", "genislik", "tekrenk", "kalAlt", "kalUst", "kalSol", "kalSag", "kalKosegen", "kalPaspasUzun", "kalPaspasKisa", "kalPaspasKalinlik"];
   document.querySelectorAll('input[name="yontem"]').forEach(r => r.onchange = () => { try { localStorage.setItem("kopruKesimYontem", r.value); } catch (e) { } ciz(); });
   try {
     const y = localStorage.getItem("kopruKesimYontem"), r = [...document.querySelectorAll('input[name="yontem"]')].find(x => x.value === y);
@@ -1287,6 +1310,9 @@
     f.append("dosya", dosya); f.append("uzunluk", $("uzunluk").value); f.append("genislik", $("genislik").value);
     f.append("etiket", $("kalEtiket").value);
     f.append("damaMerkezleri", $("kalDamaMerkezleri").value);
+    if (!$("kalDamali").checked)   // paspasli kalibrasyon: dort kenar + paspas olculeri
+      for (const [ad, id] of [["alt", "kalAlt"], ["ust", "kalUst"], ["sol", "kalSol"], ["sag", "kalSag"], ["kosegen", "kalKosegen"],
+        ["paspasUzun", "kalPaspasUzun"], ["paspasKisa", "kalPaspasKisa"], ["paspasKalinlik", "kalPaspasKalinlik"]]) f.append(ad, $(id).value);
     hata(""); $("kalDurum").textContent = "Kalibre ediliyor…";
     try {
       const r = await istek("/api/kalibrasyon", f);
@@ -1294,6 +1320,7 @@
       gorunum = "kalibrasyon";
       $("tuval").replaceChildren();
       kalDurumYaz(r.kalibrasyon, r.etiketHatasiMm);
+      if (r.paspasHatasiMm) $("kalDurum").textContent += ` Paspas köşelerinin hatası (sol üst / sağ üst / sol alt / sağ alt): ${r.paspasHatasiMm.map(e => sayi(e, 1)).join(" / ")} mm.`;
       ciz();
       if (r.uyarilar && r.uyarilar.length) hata(r.uyarilar.join(" "));
     } catch (e) { hata(e.message); kalDurumAl(); }
