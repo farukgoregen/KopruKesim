@@ -281,7 +281,9 @@ namespace KopruKesim.Vision
         }
 
         /// <summary>Noktalara aykirilari atarak (8 mm, sonra 3 mm) cizgi oturtur; noktalarin yarisi cizgide kalmali.</summary>
-        internal static bool FitRobust(List<Point2> found, int n, Point2 dir, out Point2 lineP, out Point2 lineD, out string why)
+        /// <param name="maxAngleDeg">Kume aramasinda cizginin kaba kenara gore en buyuk egimi: genis acida egik bir cizgi iki kumenin
+        /// parcalarini birlikte yakalayip dogru (duz) kumeyi gecebiliyor; kaba kenar zaten dogru yondeyse kucuk verilmeli.</param>
+        internal static bool FitRobust(List<Point2> found, int n, Point2 dir, out Point2 lineP, out Point2 lineD, out string why, double maxAngleDeg = 10)
         {
             why = null;
             List<Point2> cur = found;
@@ -289,10 +291,11 @@ namespace KopruKesim.Vision
             // Once en cok noktanin 3 mm icinde kaldigi cizgi (nokta ciftlerinden): parcadaki parlama ya da leke bazi
             // profillerde kenari parcanin icinde gosteriyor; hepsine birden oturtulan cizgi iki kumenin arasina dusup
             // gercek kenar da reddediliyordu (2026-11-24: sol alttaki siyah plaka, 24 profilin 7-10'u parlamada).
+            bool consensus = false;
             if (found.Count >= 4)
             {
                 int bestCount = 0; List<Point2> bestSet = null;
-                double cosMax = Math.Cos(10 * Math.PI / 180);
+                double cosMax = Math.Cos(maxAngleDeg * Math.PI / 180);
                 for (int i = 0; i < found.Count; i++)
                     for (int j = i + 1; j < found.Count; j++)
                     {
@@ -304,14 +307,19 @@ namespace KopruKesim.Vision
                         List<Point2> inl = found.Where(p => Math.Abs(Point2.Dot(p - pi, nr)) <= 3).ToList();
                         if (inl.Count > bestCount) { bestCount = inl.Count; bestSet = inl; }
                     }
-                if (bestSet != null && bestSet.Count >= 2) cur = bestSet;
+                if (bestSet != null && bestSet.Count >= 2) { cur = bestSet; consensus = true; }
             }
+            List<Point2> pool = cur;
             for (int pass = 0; pass < 3; pass++)
             {
                 FitLine(cur, out lineP, out lineD);
                 Point2 nrm = new Point2(-lineD.Y, lineD.X);
                 Point2 lp = lineP;
-                List<Point2> keep = found.Where(p => Math.Abs(Point2.Dot(p - lp, nrm)) <= (pass == 0 ? 8 : 3)).ToList();
+                // Kume secildiyse genis (8 mm) tur atlanir: parlamadaki noktalarin bir kismi geri alinip cizgiyi egiyordu
+                // (2026-11-24 sag alt plaka: ust kenar bir ucta 13 mm kaydi, kisa kenar 572 yerine 559)
+                // Kume bulunduysa inceltme yalniz kumenin icinde: tum noktalardan yeniden secmek egik cizginin uzantisina
+                // dusen parlama noktalarini tur tur geri aliyordu
+                List<Point2> keep = (consensus ? pool : found).Where(p => Math.Abs(Point2.Dot(p - lp, nrm)) <= (pass == 0 && !consensus ? 8 : 3)).ToList();
                 if (keep.Count < n * 0.5) { why = string.Format("kenar duz degil ({0}/{1} nokta cizgide)", keep.Count, n); return false; }
                 cur = keep;
             }

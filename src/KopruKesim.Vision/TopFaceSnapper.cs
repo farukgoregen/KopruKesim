@@ -24,6 +24,7 @@ namespace KopruKesim.Vision
         /// <summary>sampler: tabla mm noktalarinin ust yuzey duzlemindeki rengi.</summary>
         public static void Snap(List<SlabResult> slabs, Func<Point2[], Vec3b[]> sampler, LocatorOptions opt)
         {
+            if (Environment.GetEnvironmentVariable("KK_UST_YUZEY") == "0") return;   // karsilastirma icin kapatilabilir
             for (int s = 0; s < slabs.Count; s++)
             {
                 SlabResult r = slabs[s];
@@ -57,7 +58,7 @@ namespace KopruKesim.Vision
                 lineP[i] = p; lineD[i] = d; moved++;
                 log.Add(string.Format("{0:+0.0;-0.0}/{1:+0.0;-0.0}", -da, -db));
             }
-            if (Debug) Console.WriteLine("  [ust yuzey] " + string.Join(" | ", log));
+            if (Debug) Console.WriteLine("  [ust yuzey] once " + string.Join("/", r.EdgeLengths.Select(x => x.ToString("F0"))) + ": " + string.Join(" | ", log));
             if (moved == 0) return null;
             var nv = new Point2[n];
             for (int i = 0; i < n; i++)
@@ -110,7 +111,16 @@ namespace KopruKesim.Vision
             if (Debug) Console.WriteLine("    [ust yuzey profil] ref L{0:F0} a{1:F0} b{2:F0}: {3}", rl, ra, rb,
                 string.Join(" ", found.Select(f => Point2.Dot(f - a, outward).ToString("+0.0;-0.0"))));
             if (found.Count < Samples * 0.6) { why = string.Format("{0}/{1} profil", found.Count, Samples); return false; }
-            return BorderEdgeFinder.FitRobust(found, Samples, dir, out lineP, out lineD, out why);
+            // Kenar onceki adimlardan dogru yonde gelir ve en fazla MaxShiftMm kayar: egim kucuk tutulur (2026-11-24 sag alt
+            // plaka: parlama kumesinin parcasini da yakalayan 0,7 derece egik cizgi kisa kenari 572'den 559'a bozuyordu)
+            bool ok = BorderEdgeFinder.FitRobust(found, Samples, dir, out lineP, out lineD, out why, 0.3);
+            if (Debug && ok)
+            {
+                Point2 lp = lineP, ld = lineD;
+                Func<Point2, double> off = x => { Point2 q = lp + ld * Point2.Dot(x - lp, ld); return Point2.Dot(q - x, outward); };
+                Console.WriteLine("    [ust yuzey cizgi] {0}; uclarda {1:+0.0;-0.0} / {2:+0.0;-0.0} mm", why, off(a), off(a + dir * len));
+            }
+            return ok;
         }
 
         static bool Intersect(Point2 p1, Point2 d1, Point2 p2, Point2 d2, out Point2 x)
