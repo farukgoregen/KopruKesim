@@ -41,7 +41,7 @@ namespace KopruKesim.Vision
     /// </summary>
     public static class EdgeRectFinder
     {
-        private static readonly bool Debug = Environment.GetEnvironmentVariable("KK_DEBUG") == "1";
+        private static bool Debug => Environment.GetEnvironmentVariable("KK_DEBUG") == "1";
 
         /// <param name="rectified">Ustten goruntu (BGR), olcek scale piksel/mm, orijin sol alt.</param>
         /// <returns>Dortgenler, tabla mm (siluet; kalinlik duzeltmesi yapilmamis).</returns>

@@ -14,151 +14,140 @@ namespace KopruKesim.Vision
         public Mat Rectified;
         /// <summary>Bu fotograf icin kullanilan kalibrasyon.</summary>
         public TableCalibration Calibration;
-        /// <summary>Ayirmada bos tabla referansi kullanildi.</summary>
-        public bool UsedReference;
-        /// <summary>Isaret yerlesimi tanimliysa isaretlerden kalibrasyon sonucu; degilse null.</summary>
-        public MarkerFit Markers;
-        /// <summary>
-        /// Yalnizca isaret yokken: kalibrasyondaki tabla kenarlari bu fotografta gercek kenarin uzerinde
-        /// degil (kamera kurulumdan farkli konumda). Koordinatlar kayar; kurulum yenilenmeli.
-        /// </summary>
-        public bool CameraMoved;
-        /// <summary>Kamera kurulumdan farkli yerdeydi; tabla bu fotografta yeniden bulundu ve olcum onunla yapildi.</summary>
-        public bool Relocated;
-        /// <summary>Kenarlarin bu fotograftaki / referanstaki gorunurluk orani (bilgi icin).</summary>
-        public double EdgeRatio = double.NaN;
         /// <summary>Olcum yapilamadiysa nedeni (Turkce). Doluysa Slabs bostur.</summary>
         public string Error;
-        /// <summary>Tek fotografta bulunan tablanin kenar destegi (0-1); kose guvenilirligi icin.</summary>
-        public double TableSupport = double.NaN;
+        /// <summary>Parcalar bos tabla fotografiyla karsilastirilarak bulundu (kalibrasyonlu sabit kamera).</summary>
+        public bool UsedReference;
 
         public void Dispose() { if (Rectified != null) Rectified.Dispose(); }
     }
 
     /// <summary>
-    /// Olcum akisi. Isaret yerlesimi varsa kalibrasyon HER fotografta isaretlerden yeniden hesaplanir;
-    /// kamera oynasa da olcum kaymaz, yeterli isaret yoksa olcum verilmez. Isaret yoksa kurulumdaki
-    /// kalibrasyon kullanilir ve kameranin yerinde olup olmadigi tabla kenarlarindan denetlenir.
-    /// Web ve konsol ayni akisi kullanir.
+    /// Olcum akisi: fotograf bir kez yapilmis kalibrasyonla (damali ya da damasiz; lens + tabla) duz ustten
+    /// gorunume cevrilir ve parcalar orada bulunur (RunWithLens).
     /// </summary>
     public static class TableMeasure
     {
-        /// <summary>Kenar gorunurlugu referansin bu oraninin altina duserse kamera oynamis sayilir.</summary>
-        public const double MovedRatio = 0.6;
-        /// <summary>Fotografta yeniden bulunan tablanin kenarlari en az bu oranda gercek kenar uzerinde olmali.</summary>
-        public const double RelocateMinSupport = 0.6;
+        /// <summary>
+        /// Etiketlerin kendisi (beyaz sayfa, dama tahtasi) olcum sonucuna parca olarak girmesin: merkezi bir
+        /// etiketin kapladigi alanin icinde kalan parcalar atilir.
+        /// </summary>
+        private static void RemoveTags(List<SlabResult> slabs, MarkerLayout layout)
+        {
+            // Dama etiketi tabla kosesine dayali: kosesinden merkezine olan uzakligin iki kati etiketin kendisi.
+            // Etiketin kareleri, kenari ya da yanindaki tabla disi bolgeyle birlesen leke etiket alanina tasar;
+            // kosesinin cogu (ya da agirlik merkezi) etiket alaninda kalan parca etikettir.
+            const double pad = 25;
+            // Kenarin ortasindaki etikette dayanilan nokta kenar uzerindedir; o eksende etiketin yari boyu
+            // (kose etiketinden cikarilan) kullanilir.
+            double halfAlong = layout.MarkerSizeMm > 0 ? layout.MarkerSizeMm / 2 : 100;
+            var zones = layout.Markers.Select(m =>
+            {
+                Point2 a = layout.AnchorOf(m.X, m.Y);
+                double hx = Math.Abs(m.X - a.X) > 1e-6 ? Math.Abs(m.X - a.X) : halfAlong;
+                double hy = Math.Abs(m.Y - a.Y) > 1e-6 ? Math.Abs(m.Y - a.Y) : halfAlong;
+                return new[] { m.X - hx - pad, m.Y - hy - pad, m.X + hx + pad, m.Y + hy + pad };
+            }).ToList();
+            // Yalniz TEK bir etiket alanina sigan parca etikettir: kosesinin cogu ayni etiket alaninda kalmali ve
+            // parca etiketten belirgin buyuk olmamali. (2026-11-23: koseler farkli etiket alanlarina dusunce sayiliyordu;
+            // tablanin alt kenarina dayanan 1488 x 595 mm plakanin iki kosesi alt-orta ve sag-alt etiket alanina dustu,
+            // plaka etiket sanilip silindi.)
+            Func<double[], Point2, bool> inZone = (z, p) => p.X >= z[0] && p.X <= z[2] && p.Y >= z[1] && p.Y <= z[3];
+            slabs.RemoveAll(s =>
+            {
+                if (s.Vertices == null || s.Vertices.Length == 0) return zones.Any(z => inZone(z, s.Centroid));
+                Point2 c = PolygonMath.Centroid(s.Vertices);
+                return zones.Any(z =>
+                {
+                    double zoneArea = (z[2] - z[0]) * (z[3] - z[1]);
+                    if (s.AreaMm2 > 1.5 * zoneArea) return false;
+                    return inZone(z, c) || s.Vertices.Count(p => inZone(z, p)) * 2 >= s.Vertices.Length;
+                });
+            });
+        }
+
 
         /// <summary>
-        /// Tek fotograf modu: ayri bir bos tabla kurulumu yoktur. Tabla olcusu bilinir; tabla bu
-        /// fotografin kendisinde bulunur ve olcum ayni fotografla yapilir. Iki fotograf arasinda kamera
-        /// oynamasi sorunu bu sekilde hic olusmaz. Tabla bulunamazsa Error doldurulur.
+        /// Kalibrasyonlu sabit kamera: fotograf bir kez yapilmis lens + tabla kalibrasyonuyla dogrudan duz ustten
+        /// gorunume cevrilir (lens bukulmesi giderilir) ve olcum orada yapilir. Kalinlik duzeltmesi kalibrasyondaki
+        /// kamera konumunu kullanir. Etiketler tablada kalabilir; etiket alanlari parca sayilmaz.
         /// </summary>
-        public static MeasureOutput RunSingle(Mat frame, double lengthMm, double widthMm, DetectorOptions options, double thicknessMm)
+        /// <param name="emptyTable">Bos tablanin ayni kameradan fotografi (damalar kaldirildiktan sonra); varsa yalniz bos
+        /// tabladan farkli yerler parca sayilir (ahsaptaki lekeler, cita aralari karismaz). Yoksa null.</param>
+        public static MeasureOutput RunWithLens(Mat frame, LensCalibration lens, MarkerLayout tags, DetectorOptions options, double thicknessMm, Mat emptyTable = null)
         {
             var output = new MeasureOutput();
-            Point2[] c = TableFinder.FindCorners(frame, lengthMm, widthMm);
-            double support = c == null ? 0 : TableFinder.EdgeSupport(frame, c).Average();
-            output.TableSupport = support;
-            if (c == null || support < RelocateMinSupport)
+            if (frame.Cols != lens.ImageWidth || frame.Rows != lens.ImageHeight)
             {
-                output.Error = "Tabla bu fotografta bulunamadi. Tablanin tamami gorunecek sekilde yeniden cekin.";
+                output.Error = string.Format("Bu fotograf {0}x{1} piksel, kalibrasyon {2}x{3} piksel fotografla yapildi. Ayni kameranin ayni akisindan cekin ya da kalibrasyonu yenileyin.",
+                    frame.Cols, frame.Rows, lens.ImageWidth, lens.ImageHeight);
                 return output;
             }
+            double L = lens.TableLengthMm, W = lens.TableWidthMm;
+            // Olcum alani tablanin kenarindan OuterMarginMm disari tasar: cita uclari duz degil, ortadaki citalar kose
+            // citalarindan gecen kenar cizgisinin 15-20 mm disina uzanabiliyor (2026-11-24 bos tabla); o citalarin
+            // ustundeki parca da bulunmali. Dedektor genisletilmis tablada calisir, sonuc gercek tablaya geri kaydirilir.
+            double m = Math.Max(0, options.OuterMarginMm);
+            LensCalibration work = lens.WithTableMargin(m);
+            double Lw = work.TableLengthMm, Ww = work.TableWidthMm;
+            // Olcek: tablanin ortasindaki dogal cozunurluk, piksel siniri icinde
+            double k = Math.Min(LensCalibrator.NativeScale(work), Math.Sqrt(options.MaxRectifiedPixels / (Lw * Ww)));
+            Mat canvas = LensCalibrator.TopView(frame, work, k);
+            int cw = canvas.Cols, ch = canvas.Rows;
+            CameraPose camera = lens.CameraPosition();
             var cal = new TableCalibration
             {
-                TableLengthMm = lengthMm, TableWidthMm = widthMm, SlabThicknessMm = thicknessMm,
-                ImageWidth = frame.Cols, ImageHeight = frame.Rows,
-                CornerOrigin = c[0], CornerYEnd = c[1], CornerFar = c[2], CornerXEnd = c[3]
+                TableLengthMm = Lw, TableWidthMm = Ww, SlabThicknessMm = thicknessMm,
+                ImageWidth = cw, ImageHeight = ch,
+                ManualCamera = new CameraPose(camera.X + m, camera.Y + m, camera.Height) { FocalPx = camera.FocalPx },
+                CornerOrigin = new Point2(0, Ww * k), CornerYEnd = new Point2(0, 0),
+                CornerFar = new Point2(Lw * k, 0), CornerXEnd = new Point2(Lw * k, Ww * k)
             };
             cal.Build();
-            output.Calibration = cal;
-            using (var detector = new SlabDetector(cal, options))
+            double oldScale = options.PxPerMm;
+            options.PxPerMm = k;   // ustten gorunum zaten bu olcekte
+            try
             {
-                detector.SetTableColorAuto(frame);
-                output.Slabs = detector.Detect(frame);
-                output.Rectified = detector.Rectify(frame);
+                using (var detector = new SlabDetector(cal, options) { TableInsetMm = m })
+                {
+                    if (emptyTable != null && !emptyTable.Empty() && emptyTable.Cols == frame.Cols && emptyTable.Rows == frame.Rows)
+                    {
+                        using (Mat emptyTop = LensCalibrator.TopView(emptyTable, work, k)) detector.SetReference(emptyTop);
+                        output.UsedReference = true;
+                    }
+                    else detector.SetTableColorAuto(canvas);
+                    // Tablanin kenarina dayanan parcanin kenari orijinal fotografta aranir (tablanin disi da gorunur)
+                    detector.PhotoSampler = pts => BorderEdgeFinder.SamplePhoto(frame, work, pts);
+                    output.Slabs = detector.Detect(canvas);
+                    foreach (SlabResult s in output.Slabs) Shift(s, -m);
+                    // Ust yuze oturtma (TopFaceSnapper) 2026-11-24'te kaldirildi: 5 mm plakada yan yuz gorunmuyor, adim tahta
+                    // araligina ve parlamaya kanip kenarlari 5-10 mm kaydiriyordu (sol ust 1471 -> 1459). Bkz. gelistirme notlari.
+                }
             }
+            finally { options.PxPerMm = oldScale; }
+            if (tags != null) RemoveTags(output.Slabs, tags);
+            // Disariya verilen kalibrasyon gercek tablanin: genisletilmis ustten gorunumde koseleri m mm iceride
+            var real = new TableCalibration
+            {
+                TableLengthMm = L, TableWidthMm = W, SlabThicknessMm = thicknessMm,
+                ImageWidth = cw, ImageHeight = ch, ManualCamera = camera,
+                CornerOrigin = new Point2(m * k, (W + m) * k), CornerYEnd = new Point2(m * k, m * k),
+                CornerFar = new Point2((L + m) * k, m * k), CornerXEnd = new Point2((L + m) * k, (W + m) * k)
+            };
+            real.Build();
+            output.Calibration = real;
+            output.Rectified = canvas;
             return output;
         }
 
-        /// <param name="cal">Kurulum kalibrasyonu (isaret yoksa kullanilir; isaret varsa null olabilir).</param>
-        /// <param name="reference">Kurulumdaki bos tabla fotografi; yoksa null.</param>
-        /// <param name="layout">Isaret yerlesimi; yoksa null.</param>
-        public static MeasureOutput Run(TableCalibration cal, Mat frame, Mat reference, bool compareWithReference,
-            DetectorOptions options, MarkerLayout layout = null, double thicknessMm = double.NaN)
+        /// <summary>Parcanin tum koordinatlarini (mm) her iki eksende d kadar kaydirir.</summary>
+        private static void Shift(SlabResult s, double d)
         {
-            var output = new MeasureOutput();
-            bool refUsable = reference != null && !reference.Empty();
-            TableCalibration refCal = null;
-
-            if (layout != null)
-            {
-                output.Markers = MarkerSolver.Solve(layout, MarkerFinder.Find(frame), frame.Cols, frame.Rows);
-                if (output.Markers.Calibration == null) { output.Error = output.Markers.Error; return output; }
-                output.Calibration = output.Markers.Calibration;
-                if (refUsable)
-                {
-                    MarkerFit rf = MarkerSolver.Solve(layout, MarkerFinder.Find(reference), reference.Cols, reference.Rows);
-                    refCal = rf.Calibration;   // bos tabla fotografinda isaretler yoksa karsilastirma yapilmaz
-                }
-            }
-            else
-            {
-                if (cal == null) { output.Error = "Kalibrasyon yok: once kurulum yapin."; return output; }
-                if (frame.Cols != cal.ImageWidth || frame.Rows != cal.ImageHeight)
-                {
-                    output.Error = string.Format("Bu fotograf {0}x{1} piksel, kurulum ise {2}x{3}. Ayni kameradan cekilmis bir fotograf yukleyin ya da kurulumu yenileyin.",
-                        frame.Cols, frame.Rows, cal.ImageWidth, cal.ImageHeight);
-                    return output;
-                }
-                output.Calibration = cal;
-                if (refUsable && reference.Cols == frame.Cols && reference.Rows == frame.Rows)
-                {
-                    // Tabla kenari parcalarla kismen ortulebilir; referansta iyi gorunen kenarlarin toplam destegi karsilastirilir
-                    var corners = new[] { cal.CornerOrigin, cal.CornerYEnd, cal.CornerFar, cal.CornerXEnd };
-                    double[] sr = TableFinder.EdgeSupport(reference, corners);
-                    double[] sc = TableFinder.EdgeSupport(frame, corners);
-                    double a = 0, b = 0;
-                    for (int i = 0; i < 4; i++) if (sr[i] >= 0.4) { a += sr[i]; b += sc[i]; }
-                    if (a > 0)
-                    {
-                        output.EdgeRatio = b / a;
-                        output.CameraMoved = output.EdgeRatio < MovedRatio;
-                    }
-                    if (!output.CameraMoved) refCal = cal;
-                }
-                if (output.CameraMoved)
-                {
-                    // Kamera kurulumdan farkli yerde: tablayi bu fotografta yeniden bul. Tabla her fotografta
-                    // gorundugu surece kamera oynasa da olcum kaymaz. Bulunamazsa uyari kalir.
-                    Point2[] c = TableFinder.FindCorners(frame, cal.TableLengthMm, cal.TableWidthMm);
-                    if (c != null && TableFinder.EdgeSupport(frame, c).Average() >= RelocateMinSupport)
-                    {
-                        var moved = new TableCalibration
-                        {
-                            TableLengthMm = cal.TableLengthMm, TableWidthMm = cal.TableWidthMm,
-                            SlabThicknessMm = cal.SlabThicknessMm, ManualCamera = cal.ManualCamera,
-                            ImageWidth = frame.Cols, ImageHeight = frame.Rows,
-                            CornerOrigin = c[0], CornerYEnd = c[1], CornerFar = c[2], CornerXEnd = c[3]
-                        };
-                        moved.Build();
-                        output.Calibration = moved;
-                        output.Relocated = true;
-                        output.CameraMoved = false;
-                        refCal = cal;   // bos tabla fotografi kendi (kurulum) kalibrasyonuyla ustten gorunume cevrilir
-                    }
-                }
-            }
-
-            if (!double.IsNaN(thicknessMm)) output.Calibration.SlabThicknessMm = thicknessMm;
-            using (var detector = new SlabDetector(output.Calibration, options))
-            {
-                if (compareWithReference && refCal != null) { detector.SetReference(reference, refCal); output.UsedReference = true; }
-                else detector.SetTableColorAuto(frame);
-                output.Slabs = detector.Detect(frame);
-                output.Rectified = detector.Rectify(frame);
-            }
-            return output;
+            if (d == 0) return;
+            var v = new Point2(d, d);
+            if (s.Vertices != null) s.Vertices = s.Vertices.Select(p => p + v).ToArray();
+            s.Centroid = s.Centroid + v;
+            s.MinX += d; s.MaxX += d; s.MinY += d; s.MaxY += d;
         }
     }
 }
