@@ -1154,16 +1154,48 @@ namespace KopruKesim.Vision
             finally { foreach (Mat x in m) x.Dispose(); foreach (Mat x in r) x.Dispose(); }
         }
 
+        /// <summary>
+        /// Bos tabla fotografi olcumden saatler once cekilebilir; gun isigi ve kameranin beyaz dengesi bu arada tum
+        /// tablayi ayni yonde kaydirir. Olculen (2026-11-24, 11:46 olcum / 12:34 bos tabla): bos tahtada fark L +1,
+        /// a +2, b +6; bu kayma tahta lekelerini esigin ustune cikarip sahte parca yapiyor, acik ahsap uzerindeki gri
+        /// levhayi ise esigin altina itiyordu (birlesik fark 11 < 12). Referans, tablanin tamamindaki ortanca farkla
+        /// kaydirilir (parcalar tablanin yarisindan azini kaplar; ortanca onlardan etkilenmez).
+        /// </summary>
+        private static Mat AddTo(Mat src, Scalar v, Mat dst) { Cv2.Add(src, v, dst); return dst; }
+
+        private static Mat LightMatchedReference(Mat lab, Mat reference, out Scalar shiftOut)
+        {
+            var shift = new double[3];
+            var samples = new List<int>[] { new List<int>(), new List<int>(), new List<int>() };
+            var ia = lab.GetGenericIndexer<Vec3b>();
+            var ib = reference.GetGenericIndexer<Vec3b>();
+            for (int y = 0; y < lab.Rows; y += 4)
+                for (int x = 0; x < lab.Cols; x += 4)
+                {
+                    Vec3b p = ia[y, x], q = ib[y, x];
+                    samples[0].Add(p.Item0 - q.Item0); samples[1].Add(p.Item1 - q.Item1); samples[2].Add(p.Item2 - q.Item2);
+                }
+            for (int c = 0; c < 3; c++) { samples[c].Sort(); shift[c] = samples[c].Count == 0 ? 0 : samples[c][samples[c].Count / 2]; }
+            if (Environment.GetEnvironmentVariable("KK_DEBUG") == "1")
+                Console.WriteLine(string.Format(System.Globalization.CultureInfo.InvariantCulture, "  [isik] bos tablaya gore tabla kaymasi L{0:+0;-0;0} a{1:+0;-0;0} b{2:+0;-0;0}", shift[0], shift[1], shift[2]));
+            var res = new Mat();
+            shiftOut = new Scalar(shift[0], shift[1], shift[2]);
+            Cv2.Add(reference, shiftOut, res);   // 8 bit: 0-255 arasinda kirpilir
+            return res;
+        }
+
         public List<Point2[]> FindContoursMm(Mat frame)
         {
             double s = Scale;
             var contoursMm = new List<Point2[]>();
+            Scalar lightShift = new Scalar(0, 0, 0);
             using (Mat lab = ToLab(frame))
+            using (Mat refLab = _hasRealReference ? LightMatchedReference(lab, _referenceLab, out lightShift) : _referenceLab.Clone())
             using (var diff = new Mat())
             using (var mask = new Mat())
             using (var tmp = new Mat())
             {
-                Cv2.Absdiff(lab, _referenceLab, diff);
+                Cv2.Absdiff(lab, refLab, diff);
                 Mat[] d = Cv2.Split(diff);
                 Mat[] l = Cv2.Split(lab);
                 try
@@ -1206,7 +1238,7 @@ namespace KopruKesim.Vision
                     // Golge: ayni ahsap, daha az isik. Lab'de L* (8 bit: L*2,55) karanliga gore a*, b* de kuculur;
                     // (L + 41) oraninda olceklenen referans rengiyle kiyaslanir (41 = 16 x 2,55, L* tanimindaki kayma).
                     if (_hasRealReference && _opt.SuppressShadows)
-                        using (Mat shadow = ShadowMask(lab, _referenceLab, _opt.ShadowMinRatio, _opt.ShadowMaxRatio, _opt.ShadowColorTolerance))
+                        using (Mat shadow = ShadowMask(lab, refLab, _opt.ShadowMinRatio, _opt.ShadowMaxRatio, _opt.ShadowColorTolerance))
                         using (var notShadow = new Mat())
                         {
                             Cv2.BitwiseNot(shadow, notShadow);
@@ -1215,7 +1247,9 @@ namespace KopruKesim.Vision
                     // Simdi tabla renginde olmayan, bos tablada tabla renginde olan yerler (bkz. SetReference)
                     if (_hasRealReference && _tableColorLab != null)
                     {
-                        using (Mat off = OffColorMask(lab, _tableColorLab))
+                        // Tabla rengi de ayni isik kaymasiyla (yoksa sinirdaki tahta damarlari bos tabladakinden farkli tarafa duser)
+                        using (var tableNow = new Mat())
+                        using (Mat off = OffColorMask(lab, AddTo(_tableColorLab, lightShift, tableNow)))
                         using (var notEmpty = new Mat())
                         {
                             Cv2.BitwiseNot(_emptyOffColor, notEmpty);
