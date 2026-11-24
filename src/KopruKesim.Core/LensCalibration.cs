@@ -67,6 +67,27 @@ namespace KopruKesim.Core
             return c;
         }
 
+        /// <summary>
+        /// Tablasi her yandan marginMm genisletilmis kopya: yeni tabla mm'si = eski + marginMm (eski 0,0 yeni
+        /// marginMm,marginMm olur), boyu ve eni 2 * marginMm buyur. Olcumde parca tablanin kenarinin biraz disinda da
+        /// aranabilsin diye (cita uclari duz degil: ortadaki citalar kose citalarindan 15-20 mm disari tasabiliyor).
+        /// </summary>
+        public LensCalibration WithTableMargin(double marginMm)
+        {
+            var c = (LensCalibration)MemberwiseClone();
+            if (marginMm == 0) return c;
+            var shift = new Point2(marginMm, marginMm);
+            c.TableLengthMm = TableLengthMm + 2 * marginMm;
+            c.TableWidthMm = TableWidthMm + 2 * marginMm;
+            if (PaperCorners != null) c.PaperCorners = PaperCorners.Select(p => p + shift).ToArray();
+            Point2[] model = Correction != null ? Correction.Measured
+                : new[] { new Point2(0, 0), new Point2(TableLengthMm, 0), new Point2(0, TableWidthMm), new Point2(TableLengthMm, TableWidthMm) };
+            Point2[] truth = Correction != null ? Correction.True : model;
+            c.Correction = new TableCorrection(model, truth.Select(p => p + shift).ToArray(),
+                Correction != null ? Correction.Center : new Point2(TableLengthMm / 2, TableWidthMm / 2), Correction != null ? Correction.E : 0);
+            return c;
+        }
+
         /// <summary>Kagit koselerinin girilen tabla dikdortgeninin koselerinden en buyuk uzakligi (mm); bilinmiyorsa NaN.</summary>
         public double PaperCornerDeviationMm()
         {

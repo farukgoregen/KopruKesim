@@ -301,10 +301,13 @@ app.MapGet("/api/kalibrasyon/incele", () =>
     lock (gate)
     {
         LensCalibration cal = LoadLens();
-        if (cal == null || !File.Exists(calibrationPhotoPath))
+        // Tabla koseleri bos tabla fotografindan bulunur: varsa o gosterilir, yoksa kalibrasyon fotografi
+        bool fromEmpty = File.Exists(emptyPath);
+        string shown = fromEmpty ? emptyPath : calibrationPhotoPath;
+        if (cal == null || !File.Exists(shown))
             return Fail("İncelenecek kayıtlı kalibrasyon fotoğrafı bulunamadı.");
 
-        using Mat frame = Cv2.ImRead(calibrationPhotoPath);
+        using Mat frame = Cv2.ImRead(shown);
         if (frame.Empty() || frame.Cols != cal.ImageWidth || frame.Rows != cal.ImageHeight)
             return Fail("Kayıtlı fotoğraf bu kalibrasyonun görüntü boyutuyla uyuşmuyor.");
 
@@ -314,55 +317,22 @@ app.MapGet("/api/kalibrasyon/incele", () =>
             return Fail("Kalibrasyondaki tabla ölçüleriyle üstten görünüm oluşturulamıyor.");
 
         using Mat top = LensCalibrator.TopView(frame, cal, scale);
-        CalibrationTag tag = LensTag(cal.TagType);
-        Point2[] pixels, table;
-        int[] slots;
-        string pointError;
-        bool matsOnly = cal.TagType == "paspas";   // yalniz paspasli kalibrasyon: eslestirilecek dama yok
-        if (matsOnly) { pointError = "paspas"; pixels = null; table = null; slots = null; }
-        else if (cal.CornerSource == LensCalibration.CornerSourceMats)
-            pointError = LensCalibrator.MatchSavedBoards(frame, cal, tag, out pixels, out table, out slots);
-        else
-        {
-            pointError = LensCalibrator.MatchBoardPoints(frame, length, width, tag, out _, out pixels, out table, cal.MeasuredTagCenters, cal.BoardPlacements);
-            slots = pixels == null ? null : Enumerable.Range(0, pixels.Length).Select(j => j / (tag.Cols * tag.Rows)).ToArray();
-        }
-        object[] boards = Array.Empty<object>();
         double[] ValidPoint(Point2 p) => double.IsFinite(p.X) && double.IsFinite(p.Y) ? P(p) : null;
-        if (pointError == null)
-        {
-            Point2[] projected = LensCalibrator.TableToImage(cal, table);
-            Point2[] back = LensCalibrator.ImageToTable(cal, pixels);
-            boards = slots.Distinct().OrderBy(i => i).Select(i =>
-            {
-                int[] indices = Enumerable.Range(0, slots.Length).Where(j => slots[j] == i).ToArray();
-                double[] errors = indices.Select(j => Point2.Distance(back[j], table[j])).ToArray();
-                return (object)new
-                {
-                    no = i + 1,
-                    hataMm = errors.All(double.IsFinite) ? (double?)Math.Round(errors.Average(), 2) : null,
-                    foto = indices.Select(j => new { gorulen = ValidPoint(pixels[j]), beklenen = ValidPoint(projected[j]) }),
-                    tabla = indices.Select(j => new { gorulen = ValidPoint(back[j]), beklenen = ValidPoint(table[j]) })
-                };
-            }).ToArray();
-        }
-
         string Jpeg(Mat image) => "data:image/jpeg;base64," + Convert.ToBase64String(image.ToBytes(".jpg", new ImageEncodingParam(ImwriteFlags.JpegQuality, 88)));
         return Results.Json(new
         {
             kalibrasyon = LensStatus(cal),
+            fotoKaynagi = fromEmpty ? "bos" : "kalibrasyon",
             foto = Jpeg(frame),
             ustten = Jpeg(top),
             cerceve = LensCalibrator.TableToImage(cal, TableOutline(cal, 40)).Select(ValidPoint),
             sifir = ValidPoint(LensCalibrator.TableToImage(cal, new[] { new Point2(0, 0) })[0]),
-            // Kose kagitlarinin dis koseleri (tabla kosesi kabul edilen noktalar): fotografta ve tablada
+            // Tabla kosesi kabul edilen noktalar (seritle olculen tabla): fotografta ve tablada
             kagitKoseleri = cal.PaperCorners == null ? null : new
             {
                 foto = LensCalibrator.TableToImage(cal, cal.PaperCorners).Select(ValidPoint),
                 tabla = cal.PaperCorners.Select(ValidPoint)
-            },
-            damalar = boards,
-            noktaUyarisi = pointError == null || matsOnly ? null : "Kayıtlı karede dama noktaları yeniden eşleştirilemedi. Görüntüler mevcut kalibrasyon modeliyle gösteriliyor."
+            }
         });
     }
 });
@@ -593,30 +563,55 @@ app.MapPost("/api/kalibrasyon/bos", async (HttpRequest req) =>
         // Damalar hala tabladaysa uyar: bos tabla olarak kaydedilirse olcumde etiket alanlari kor kalir
         int tags = CheckerFinder.FindAll(frame, LensTag(c.TagType).Cols, LensTag(c.TagType).Rows).Count;
         if (tags > 0) return Fail($"Fotoğrafta {tags} kalibrasyon daması görünüyor. Boş tabla fotoğrafından önce damaları kaldırın.");
+        // Seritle olculen tabla kenarlari formla gelir (arayuz her kayitta gonderir); gelmezse kalibrasyondaki kalir
+        double Num(string key) => double.TryParse(form[key].ToString().Replace(',', '.'), NumberStyles.Float, inv, out double v) && double.IsFinite(v) ? v : double.NaN;
+        Point2[] tape = c.PaperCorners;
+        if (form.ContainsKey("alt"))
+        {
+            var sides = new TableSides { Bottom = Num("alt"), Top = Num("ust"), Left = Num("sol"), Right = Num("sag"), Diagonal = Num("kosegen") };
+            foreach (var (v, name) in new[] { (sides.Bottom, "alt"), (sides.Top, "üst"), (sides.Left, "sol"), (sides.Right, "sağ") })
+                if (double.IsNaN(v) || v < 500 || v > 10000) return Fail($"Tablanın {name} kenarını mm olarak girin (şeritle, köşeden köşeye).");
+            if (!double.IsNaN(sides.Diagonal) && sides.Diagonal <= 0) sides.Diagonal = double.NaN;
+            tape = MatCalibrator.TableCorners(sides, out string tapeError);
+            if (tape == null) return Fail(tapeError);
+        }
+        if (tape == null || tape.Length != 4) return Fail("Tabla ölçüleri bilinmiyor: tablanın dört kenarını girip yeniden deneyin.");
         File.WriteAllBytes(emptyPath, bytes);
         // Tabla kenarlari: bos tablada tablanin dort kenari bulunur (kenar boyunca 15-30 noktadan dogru, lensin gordugu
-        // sekliyle), koseleri seritle olculen tabla koselerine oturtulur. Boylece cizilen tabla cercevesi tablanin kenarindan
-        // gecer ve olculer girilen tabla olcusune gore yapilir. Paspas koselerinden daha kesin (paspas boylari 429-439 mm).
-        if (c.PaperCorners != null && c.PaperCorners.Length == 4)
+        // sekliyle; alt ve ust kenar kose citalarinin ucundan gecer), koseleri seritle olculen tabla koselerine oturtulur.
+        // Boylece cizilen tabla cercevesi tablanin koselerinden gecer ve olculer girilen tabla olcusune gore yapilir.
+        // Paspas koselerinden daha kesin (paspas boylari 429-439 mm).
+        LensCalibration raw = c.WithoutCorrection();
+        Point2[] expected = c.PaperCorners != null && c.PaperCorners.Length == 4
+            ? (c.Correction == null ? c.PaperCorners : c.PaperCorners.Select(c.Correction.Invert).ToArray())
+            : tape;
+        TableEdgeFinder.Result edges = TableEdgeFinder.Find(frame, raw, expected);
+        if (edges.Corners == null)
         {
-            LensCalibration raw = c.WithoutCorrection();
-            Point2[] tape = c.PaperCorners;
-            Point2[] expected = c.Correction == null ? tape : tape.Select(c.Correction.Invert).ToArray();
-            TableEdgeFinder.Result edges = TableEdgeFinder.Find(frame, raw, expected);
-            if (edges.Corners != null)
-            {
-                Point2 center = LensCalibrator.ImageToTable(raw, new[] { new Point2(raw.Cx, raw.Cy) })[0];
-                raw.Correction = new TableCorrection(edges.Corners, tape, center, 0);
-                raw.ResidualRadial = 0;
-                raw.Save(lensPath);
-                Point2[] q = edges.Corners;
-                Console.WriteLine(string.Format(inv, "Tabla kenarlari bos tabladan bulundu: kamerada {0:F0} x {1:F0} mm (alt/ust {0:F0}/{2:F0}, sol/sag {1:F0}/{3:F0}); girilen tablaya oturtuldu.",
-                    Point2.Distance(q[2], q[3]), Point2.Distance(q[2], q[0]), Point2.Distance(q[0], q[1]), Point2.Distance(q[3], q[1])));
-                return Results.Json(LensStatus(LoadLens()));
-            }
             Console.WriteLine("Tabla kenarlari bulunamadi, onceki tabla duzeltmesi kaldi: " + edges.Error);
+            return Results.Json(new
+            {
+                kalibrasyon = LensStatus(c),
+                tablaKenari = (object)null,
+                uyari = "Boş tabla kaydedildi ama tablanın kenarları fotoğrafta bulunamadı (" + edges.Error + "). Önceki tabla çerçevesi kullanılıyor; tablanın dört kenarı açıkça görünürken yeniden kaydedin."
+            });
         }
-        return Results.Json(LensStatus(c));
+        Point2 center = LensCalibrator.ImageToTable(raw, new[] { new Point2(raw.Cx, raw.Cy) })[0];
+        raw.Correction = new TableCorrection(edges.Corners, tape, center, 0);
+        raw.ResidualRadial = 0;
+        raw.PaperCorners = (Point2[])tape.Clone();
+        raw.TableLengthMm = Math.Round(Math.Max(tape[1].X, tape[3].X), 1);
+        raw.TableWidthMm = Math.Round(Math.Max(tape[0].Y, tape[1].Y), 1);
+        raw.Save(lensPath);
+        Point2[] q = edges.Corners;
+        double alt = Point2.Distance(q[2], q[3]), ust = Point2.Distance(q[0], q[1]), sol = Point2.Distance(q[2], q[0]), sag = Point2.Distance(q[3], q[1]);
+        Console.WriteLine(string.Format(inv, "Tabla kenarlari bos tabladan bulundu: kamerada alt/ust {0:F0}/{1:F0}, sol/sag {2:F0}/{3:F0} mm; girilen tablaya oturtuldu.", alt, ust, sol, sag));
+        return Results.Json(new
+        {
+            kalibrasyon = LensStatus(LoadLens()),
+            tablaKenari = new { alt = Math.Round(alt), ust = Math.Round(ust), sol = Math.Round(sol), sag = Math.Round(sag) },
+            uyari = (string)null
+        });
     }
 });
 
@@ -870,8 +865,8 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
         head.AppendLine("dosya_adi=" + (form.Files.GetFile("dosya")?.FileName ?? "-"));
         head.AppendLine("foto=" + frame.Cols + "x" + frame.Rows + " md5=" + Md5(bytes));
         head.AppendLine(string.Format(inv, "kalinlik={0} tekrenk={1} kalibrasyon={2} kenar={3} parcaIncelt={4} duz={5}", thickness, uniformTable ? 1 : 0, mode, margin, options.RefineEdges ? 1 : 0, flat ? 1 : 0));
-        head.AppendLine(string.Format(inv, "secenek BorderMarginMm={0} MinAreaMm2={1} NoReferenceBrightnessDiff={2} CleanupMm={3} SimplifyToleranceMm={4} MinEdgeMm={5} RefineEdges={6}",
-            options.BorderMarginMm, options.MinAreaMm2, options.NoReferenceBrightnessDiff, options.CleanupMm, options.Locator.SimplifyToleranceMm, options.Locator.MinEdgeMm, options.RefineEdges));
+        head.AppendLine(string.Format(inv, "secenek BorderMarginMm={0} MinAreaMm2={1} NoReferenceBrightnessDiff={2} CleanupMm={3} SimplifyToleranceMm={4} MinEdgeMm={5} RefineEdges={6} OuterMarginMm={7}",
+            options.BorderMarginMm, options.MinAreaMm2, options.NoReferenceBrightnessDiff, options.CleanupMm, options.Locator.SimplifyToleranceMm, options.Locator.MinEdgeMm, options.RefineEdges, options.OuterMarginMm));
         head.AppendLine("bos=" + (File.Exists(usedEmpty) ? usedEmpty + " " + File.GetLastWriteTime(usedEmpty).ToString("yyyy-MM-dd HH:mm:ss") + " md5=" + Md5(File.ReadAllBytes(usedEmpty)) : "yok"));
         string usedLens = cornerMode ? cornerPath : lensPath;
         head.AppendLine("--- kalibrasyon " + usedLens);

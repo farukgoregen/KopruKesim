@@ -48,8 +48,10 @@ namespace KopruKesim.Vision
         /// <param name="sampler">Tabla mm noktalarinin fotograftaki rengi (BGR); tablanin disindaki noktalar da.</param>
         /// <param name="allEdges">Seride girmeyen kenarlar da fotografta aranir (kaba dortgen iyiyse daha dogru).</param>
         /// <param name="differs">Tabla mm noktasi bos tabladan farkli mi (fark maskesi); null ise kenar hizalama yapilmaz.</param>
+        /// <param name="insetMm">Gercek tabla kenari verilen tablanin kenarindan bu kadar iceride (olcum alani tablanin disina
+        /// tasiyorsa). Arama verilen tablanin kenarina kadar; tasma ve kenara hizalama gercek kenara gore.</param>
         public static Result Refine(Point2[] quad, double tableLengthMm, double tableWidthMm, double bandMm, Func<Point2[], Vec3b[]> sampler,
-            bool allEdges = true, Func<Point2, bool> differs = null)
+            bool allEdges = true, Func<Point2, bool> differs = null, double insetMm = 0)
         {
             var res = new Result();
             if (quad == null || quad.Length != 4 || sampler == null) { res.Info = "dortgen yok"; return res; }
@@ -90,7 +92,7 @@ namespace KopruKesim.Vision
                 if (ok)
                 {
                     // Bulunan kenar tablanin sinirinin belirgin disindaysa parca tasiyor (ya da kenar gorulemedi)
-                    double outA = OutsideBy(ProjectOnLine(a, p, dd), L, W), outB = OutsideBy(ProjectOnLine(b, p, dd), L, W);
+                    double outA = OutsideBy(ProjectOnLine(a, p, dd), L, W, insetMm), outB = OutsideBy(ProjectOnLine(b, p, dd), L, W, insetMm);
                     overhang = Math.Max(outA, outB) > OverhangMm;
                 }
                 if (!ok || overhang)
@@ -99,7 +101,7 @@ namespace KopruKesim.Vision
                     // Parca ile tablanin disi ayni renkteyse (siyah plaka, siyah sase) kenar fotografta gorulemez. Parca bos
                     // tablaya gore tablanin kenarina kadar uzaniyorsa ve kenari tablanin kenarina paralelse oraya hizali say.
                     Point2 sp, sd;
-                    if (inBand && differs != null && ReachesSide(a, b, dir, outward, len, L, W, differs, out sp, out sd))
+                    if (inBand && differs != null && ReachesSide(a, b, dir, outward, len, L, W, insetMm, differs, out sp, out sd))
                     {
                         lineP[e] = sp; lineD[e] = sd;
                         res.Assumed = (res.Assumed == null ? "" : res.Assumed + ", ") + SideName(outward);
@@ -143,13 +145,13 @@ namespace KopruKesim.Vision
         /// Kenar tablanin bir kenarina paralel mi ve parca (bos tablaya gore farkli bolge) kaba kenardan o kenara kadar
         /// kesintisiz uzaniyor mu. Evetse tablanin o kenari (nokta + yon) doner.
         /// </summary>
-        private static bool ReachesSide(Point2 a, Point2 b, Point2 dir, Point2 outward, double len, double L, double W,
+        private static bool ReachesSide(Point2 a, Point2 b, Point2 dir, Point2 outward, double len, double L, double W, double inset,
             Func<Point2, bool> differs, out Point2 sideP, out Point2 sideD)
         {
             sideP = a; sideD = dir;
-            Point2 n; double offset;   // tablanin kenarinin disari normali ve konumu
-            if (Math.Abs(outward.X) > Math.Abs(outward.Y)) { n = new Point2(Math.Sign(outward.X), 0); offset = outward.X > 0 ? L : 0; }
-            else { n = new Point2(0, Math.Sign(outward.Y)); offset = outward.Y > 0 ? W : 0; }
+            Point2 n; double offset;   // gercek tablanin kenarinin disari normali ve konumu
+            if (Math.Abs(outward.X) > Math.Abs(outward.Y)) { n = new Point2(Math.Sign(outward.X), 0); offset = outward.X > 0 ? L - inset : inset; }
+            else { n = new Point2(0, Math.Sign(outward.Y)); offset = outward.Y > 0 ? W - inset : inset; }
             if (Point2.Dot(outward, n) < Math.Cos(AlignMaxAngleDeg * Math.PI / 180)) return false;
             int good = 0, total = 0;
             for (int i = 0; i < Samples; i++)
@@ -187,9 +189,9 @@ namespace KopruKesim.Vision
 
         private static Point2 ProjectOnLine(Point2 x, Point2 p, Point2 d) => p + d * Point2.Dot(x - p, d);
 
-        /// <summary>Nokta tablanin disinda ne kadar (mm; icerideyse 0).</summary>
-        private static double OutsideBy(Point2 p, double L, double W) =>
-            Math.Max(Math.Max(-p.X, p.X - L), Math.Max(Math.Max(-p.Y, p.Y - W), 0));
+        /// <summary>Nokta gercek tablanin (verilen tablanin inset kadar ici) disinda ne kadar (mm; icerideyse 0).</summary>
+        private static double OutsideBy(Point2 p, double L, double W, double inset) =>
+            Math.Max(Math.Max(inset - p.X, p.X - (L - inset)), Math.Max(Math.Max(inset - p.Y, p.Y - (W - inset)), 0));
 
         /// <summary>p'den o yonunde tablanin sinirina uzaklik (mm). Disaridaysa 0.</summary>
         private static double RayToBorder(Point2 p, Point2 o, double L, double W)

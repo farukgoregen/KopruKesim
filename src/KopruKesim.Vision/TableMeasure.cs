@@ -84,42 +84,70 @@ namespace KopruKesim.Vision
                 return output;
             }
             double L = lens.TableLengthMm, W = lens.TableWidthMm;
+            // Olcum alani tablanin kenarindan OuterMarginMm disari tasar: cita uclari duz degil, ortadaki citalar kose
+            // citalarindan gecen kenar cizgisinin 15-20 mm disina uzanabiliyor (2026-11-24 bos tabla); o citalarin
+            // ustundeki parca da bulunmali. Dedektor genisletilmis tablada calisir, sonuc gercek tablaya geri kaydirilir.
+            double m = Math.Max(0, options.OuterMarginMm);
+            LensCalibration work = lens.WithTableMargin(m);
+            double Lw = work.TableLengthMm, Ww = work.TableWidthMm;
             // Olcek: tablanin ortasindaki dogal cozunurluk, piksel siniri icinde
-            double k = Math.Min(LensCalibrator.NativeScale(lens), Math.Sqrt(options.MaxRectifiedPixels / (L * W)));
-            Mat canvas = LensCalibrator.TopView(frame, lens, k);
+            double k = Math.Min(LensCalibrator.NativeScale(work), Math.Sqrt(options.MaxRectifiedPixels / (Lw * Ww)));
+            Mat canvas = LensCalibrator.TopView(frame, work, k);
             int cw = canvas.Cols, ch = canvas.Rows;
+            CameraPose camera = lens.CameraPosition();
             var cal = new TableCalibration
             {
-                TableLengthMm = L, TableWidthMm = W, SlabThicknessMm = thicknessMm,
-                ImageWidth = cw, ImageHeight = ch, ManualCamera = lens.CameraPosition(),
-                CornerOrigin = new Point2(0, W * k), CornerYEnd = new Point2(0, 0),
-                CornerFar = new Point2(L * k, 0), CornerXEnd = new Point2(L * k, W * k)
+                TableLengthMm = Lw, TableWidthMm = Ww, SlabThicknessMm = thicknessMm,
+                ImageWidth = cw, ImageHeight = ch,
+                ManualCamera = new CameraPose(camera.X + m, camera.Y + m, camera.Height) { FocalPx = camera.FocalPx },
+                CornerOrigin = new Point2(0, Ww * k), CornerYEnd = new Point2(0, 0),
+                CornerFar = new Point2(Lw * k, 0), CornerXEnd = new Point2(Lw * k, Ww * k)
             };
             cal.Build();
             double oldScale = options.PxPerMm;
             options.PxPerMm = k;   // ustten gorunum zaten bu olcekte
             try
             {
-                using (var detector = new SlabDetector(cal, options))
+                using (var detector = new SlabDetector(cal, options) { TableInsetMm = m })
                 {
                     if (emptyTable != null && !emptyTable.Empty() && emptyTable.Cols == frame.Cols && emptyTable.Rows == frame.Rows)
                     {
-                        using (Mat emptyTop = LensCalibrator.TopView(emptyTable, lens, k)) detector.SetReference(emptyTop);
+                        using (Mat emptyTop = LensCalibrator.TopView(emptyTable, work, k)) detector.SetReference(emptyTop);
                         output.UsedReference = true;
                     }
                     else detector.SetTableColorAuto(canvas);
                     // Tablanin kenarina dayanan parcanin kenari orijinal fotografta aranir (tablanin disi da gorunur)
-                    detector.PhotoSampler = pts => BorderEdgeFinder.SamplePhoto(frame, lens, pts);
+                    detector.PhotoSampler = pts => BorderEdgeFinder.SamplePhoto(frame, work, pts);
                     output.Slabs = detector.Detect(canvas);
+                    foreach (SlabResult s in output.Slabs) Shift(s, -m);
                     // Ust yuze oturtma (TopFaceSnapper) 2026-11-24'te kaldirildi: 5 mm plakada yan yuz gorunmuyor, adim tahta
                     // araligina ve parlamaya kanip kenarlari 5-10 mm kaydiriyordu (sol ust 1471 -> 1459). Bkz. gelistirme notlari.
                 }
             }
             finally { options.PxPerMm = oldScale; }
             if (tags != null) RemoveTags(output.Slabs, tags);
-            output.Calibration = cal;
+            // Disariya verilen kalibrasyon gercek tablanin: genisletilmis ustten gorunumde koseleri m mm iceride
+            var real = new TableCalibration
+            {
+                TableLengthMm = L, TableWidthMm = W, SlabThicknessMm = thicknessMm,
+                ImageWidth = cw, ImageHeight = ch, ManualCamera = camera,
+                CornerOrigin = new Point2(m * k, (W + m) * k), CornerYEnd = new Point2(m * k, m * k),
+                CornerFar = new Point2((L + m) * k, m * k), CornerXEnd = new Point2((L + m) * k, (W + m) * k)
+            };
+            real.Build();
+            output.Calibration = real;
             output.Rectified = canvas;
             return output;
+        }
+
+        /// <summary>Parcanin tum koordinatlarini (mm) her iki eksende d kadar kaydirir.</summary>
+        private static void Shift(SlabResult s, double d)
+        {
+            if (d == 0) return;
+            var v = new Point2(d, d);
+            if (s.Vertices != null) s.Vertices = s.Vertices.Select(p => p + v).ToArray();
+            s.Centroid = s.Centroid + v;
+            s.MinX += d; s.MaxX += d; s.MinY += d; s.MaxY += d;
         }
     }
 }

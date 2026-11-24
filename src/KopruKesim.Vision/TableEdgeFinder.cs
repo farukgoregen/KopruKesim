@@ -10,7 +10,8 @@ namespace KopruKesim.Vision
     /// Bos tabla fotografinda tablanin dort kenarini (ahsabin bittigi yer) bulur. Her kenar boyunca ~100 mm arayla kenara
     /// dik parlaklik profili alinir, en guclu gecis kenar noktasidir; noktalara aykirilari atan bir dogru oturtulur ve
     /// komsu dogrularin kesisimi tabla kosesidir. Ikinci turda yalniz ilk dogrunun +-15 mm yakininda aranir (ust kenardaki
-    /// yesil serit, kenardaki talas gibi ikinci gecisler karismasin).
+    /// yesil serit, kenardaki talas gibi ikinci gecisler karismasin). Alt ve ust kenar (cita uclari) duz degil: bu iki
+    /// dogru sonunda kose citalarinin ucundan gecirilir (kose sol/sag kenar dogrusuyla dis citanin ucunun kesisimi).
     ///
     /// Kameranin isi tablayi gormektir: bulunan koseler seritle olculen tabla koselerine oturtulur (TableCorrection).
     /// Paspas koseleri bu is icin yeterince kesin degildi (paspas boylari 429-439 mm, kose tespiti +-5-15 mm); kenar
@@ -79,6 +80,36 @@ namespace KopruKesim.Vision
                     double t = ((q[0].X - p[0].X) * q[1].Y - (q[0].Y - p[0].Y) * q[1].X) / den;
                     return p[0] + p[1] * t;
                 }
+                // Alt ve ust kenar cita uclaridir ve citalar gevsek: ortadaki citalar uctakilerden 15-20 mm asagida
+                // durabiliyor (bos tablada olculdu: ust kenar uclarda +11, ortada -6 mm; sol/sag kenar +-5 mm duz).
+                // Tum kenara tek dogru koseleri ~10 mm iceri/disari cekiyordu. Kose, o kosedeki dis citanin ucundan
+                // bulunur: uc dogrusu iki kose bolgesinden gecer, aradaki citalarin girinti cikintisi onu etkilemez.
+                using (var lab = new Mat())
+                {
+                    Cv2.CvtColor(frame, lab, ColorConversionCodes.BGR2Lab);
+                    Cv2.GaussianBlur(lab, lab, new Size(0, 0), 1.5);
+                    lab.GetArray(out Vec3b[] labPx);
+                    var cornerDbg = new List<string>();
+                    for (int e = 0; e < 2; e++)
+                    {
+                        var q = new Point2[2];
+                        for (int s = 0; s < 2; s++)
+                        {
+                            int side = 2 + s, other = 2 + (1 - s);
+                            Point2 c = X(e, side), c2 = X(e, other);
+                            Point2 u = (c2 - c) * (1 / Point2.Distance(c, c2));   // koseden tablanin icine, kenar boyunca
+                            var n = new Point2(-lines[e][1].Y, lines[e][1].X);
+                            if (Point2.Dot(n, c - center) < 0) n = n * -1;   // disari
+                            var bases = Enumerable.Range(0, 14).Select(i => c + u * (20 + 10 * i)).ToArray();
+                            List<double> offs = ScanColor(labPx, w, h, lens, bases, n, CornerSearchMm);
+                            double med = offs.Count >= 5 ? offs.OrderBy(x => x).ElementAt(offs.Count / 2) : 0;
+                            q[s] = c + u * 85 + n * med;
+                            cornerDbg.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0} {1}: {2:+0.0;-0.0} mm ({3}/14)", Name(e), Name(side), med, offs.Count));
+                        }
+                        lines[e] = new[] { q[0], (q[1] - q[0]) * (1 / Point2.Distance(q[0], q[1])) };
+                    }
+                    dbg.Add("kose citasi " + string.Join(", ", cornerDbg));
+                }
                 res.Corners = new[] { X(1, 2), X(1, 3), X(0, 2), X(0, 3) };
                 if (Environment.GetEnvironmentVariable("KK_DEBUG") == "1")
                     Console.WriteLine("  [tabla kenari] " + string.Join("; ", dbg) + " -> koseler " + string.Join(" ", res.Corners.Select(c => c.ToString())));
@@ -94,6 +125,51 @@ namespace KopruKesim.Vision
         }
 
         static string Name(int e) => e == 0 ? "alt" : e == 1 ? "ust" : e == 2 ? "sol" : "sag";
+
+        /// <summary>Kose citasinin ucunun tum kenara oturan dogrudan en fazla uzakligi (mm).</summary>
+        const double CornerSearchMm = 25;
+
+        /// <summary>
+        /// Her taban noktasinda n yonunde [-r, r] mm araliginda icten ilk guclu renk gecisi; dogruya gore isaretli uzaklik
+        /// (mm, + disari). Renk (Lab) farki kullanilir: sol alt kosede acik tahta ile acik gri zemin parlaklikta neredeyse
+        /// ayni, sari-mavi farki ise belirgin.
+        /// </summary>
+        static List<double> ScanColor(Vec3b[] lab, int w, int h, LensCalibration lens, Point2[] bases, Point2 n, double r)
+        {
+            var found = new List<double>();
+            int m = (int)Math.Round(2 * r) + 1;
+            for (int i = 0; i < bases.Length; i++)
+            {
+                var prof = new Point2[m];
+                for (int k = 0; k < m; k++) prof[k] = bases[i] + n * (-r + k);
+                Point2[] px = LensCalibrator.TableToImage(lens, prof, 0);
+                var v = new double[m, 3];
+                bool ok = true;
+                for (int k = 0; k < m && ok; k++)
+                {
+                    double x = px[k].X, y = px[k].Y;
+                    if (x < 0 || y < 0 || x > w - 2 || y > h - 2) { ok = false; break; }
+                    int x0 = (int)x, y0 = (int)y; double fx = x - x0, fy = y - y0; int j = y0 * w + x0;
+                    for (int c = 0; c < 3; c++)
+                        v[k, c] = lab[j][c] * (1 - fx) * (1 - fy) + lab[j + 1][c] * fx * (1 - fy) + lab[j + w][c] * (1 - fx) * fy + lab[j + w + 1][c] * fx * fy;
+                }
+                if (!ok) continue;
+                var dvs = new double[m];
+                double max = 0;
+                for (int k = 1; k < m - 1; k++)
+                {
+                    double s = 0;
+                    for (int c = 0; c < 3; c++) { double d = v[k + 1, c] - v[k - 1, c]; s += d * d; }
+                    dvs[k] = Math.Sqrt(s); max = Math.Max(max, dvs[k]);
+                }
+                int best = -1;
+                for (int k = 2; k < m - 2; k++)
+                    if (dvs[k] >= 0.5 * max && dvs[k] >= dvs[k - 1] && dvs[k] >= dvs[k + 1]) { best = k; break; }
+                if (best < 2 || best > m - 3 || dvs[best] < 8) continue;
+                found.Add(-r + best);
+            }
+            return found;
+        }
 
         static double SignedOffsetToLine(Point2 q, Point2 p, Point2 d, Point2 n)
         {

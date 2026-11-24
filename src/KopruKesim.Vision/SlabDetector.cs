@@ -49,6 +49,12 @@ namespace KopruKesim.Vision
         public double FillGapMm = 80;
         /// <summary>Tabla kenarindan bu kadar iceride kalan bolge taranir (mm).</summary>
         public double BorderMarginMm = 40;
+        /// <summary>
+        /// TableMeasure.RunWithLens: olcum alani tablanin kenarindan bu kadar disari tasar (mm). Cita uclari duz degil:
+        /// ortadaki citalar kose citalarindan gecen kenar cizgisinin 15-20 mm disina uzanabiliyor; kenara dayanan parcanin
+        /// kenari o citalarin ustunde de aranabilmeli. Kenar seridi (BorderMarginMm) yine gercek tabla kenarindan olculur.
+        /// </summary>
+        public double OuterMarginMm = 30;
         /// <summary>Bundan kucuk nesneler mermer sayilmaz (mm2).</summary>
         public double MinAreaMm2 = 200 * 200;
         public LocatorOptions Locator = new LocatorOptions();
@@ -634,6 +640,16 @@ namespace KopruKesim.Vision
         /// </summary>
         public Func<Point2[], Vec3b[]> PhotoSampler;
 
+        /// <summary>
+        /// Dedektorun tablasi gercek tablanin her yandan bu kadar (mm) genisletilmisi (TableMeasure.RunWithLens): gercek
+        /// tabla kenari dedektor tablasinin kenarindan TableInsetMm iceridedir. Kenar seridi, kenara dayanma ve tasma
+        /// kurallari gercek kenara gore uygulanir.
+        /// </summary>
+        public double TableInsetMm { get; set; }
+
+        /// <summary>Taranmayan kenar seridinin dedektor tablasinin kenarindan genisligi (mm).</summary>
+        private double Band => Math.Max(0, _opt.BorderMarginMm) + TableInsetMm;
+
         /// <summary>Son olcumun fark maskesi (kenar seridi silinmeden).</summary>
         private Mat _lastMask;
 
@@ -701,11 +717,11 @@ namespace KopruKesim.Vision
                     quad = box.Points().Select(p => new Point2(p.X, p.Y)).ToArray();
                 }
             }
-            double band = Math.Max(0, _opt.BorderMarginMm);
+            double band = Band;
             Func<Point2, bool> differs = MaskAt;
             // Yalniz seride giren kenarlar fotografta (once maskede, sonra renk profilinde) aranir; oteki kenarlar asagida
             // RefineInImage ile gercek gecise oturtulur (renk profili parlama ve cita araliklarinda sasiyordu)
-            BorderEdgeFinder.Result found = BorderEdgeFinder.Refine(quad, _cal.TableLengthMm, _cal.TableWidthMm, band, PhotoSampler, true, differs);
+            BorderEdgeFinder.Result found = BorderEdgeFinder.Refine(quad, _cal.TableLengthMm, _cal.TableWidthMm, band, PhotoSampler, true, differs, TableInsetMm);
             if (dbg) Console.WriteLine("  [kenar arama] " + found.Info);
             if (found.Overhangs) { note = OverhangNote; return null; }
             if (found.Quad == null) return null;
@@ -774,7 +790,7 @@ namespace KopruKesim.Vision
         /// <summary>Noktalardan biri taranmayan kenar seridinin sinirina extraMm'den yakin mi.</summary>
         private bool NearBorder(Point2[] pts, double extraMm)
         {
-            double m = Math.Max(0, _opt.BorderMarginMm) + extraMm, L = _cal.TableLengthMm, W = _cal.TableWidthMm;
+            double m = Band + extraMm, L = _cal.TableLengthMm, W = _cal.TableWidthMm;
             return pts.Any(p => p.X <= m || p.Y <= m || p.X >= L - m || p.Y >= W - m);
         }
 
@@ -1015,7 +1031,7 @@ namespace KopruKesim.Vision
             using (Mat rect = Rectify(frame))
             {
                 var eo = _opt.Edges ?? new EdgeRectOptions();
-                eo.BorderMm = Math.Max(eo.BorderMm, _opt.BorderMarginMm * 0.5);
+                eo.BorderMm = Math.Max(eo.BorderMm, _opt.BorderMarginMm * 0.5 + TableInsetMm);
                 // Bulucu yalniz kaba konum verir; koseler RefineInImage ile tam cozunurlukte, piksel altina oturur.
                 // Bu yuzden kucultulmus goruntude aramak yeterli ve birkac kat hizli (LSD ve profil taramasi).
                 double findScale = Scale;
@@ -1283,7 +1299,7 @@ namespace KopruKesim.Vision
                 _lastMask?.Dispose();
                 _lastMask = mask.Clone();
                 // Tabla kenarindaki serit yok sayilir (cizgi kalinligi kenarin iki yanina esit dagilir)
-                int margin = (int)(_opt.BorderMarginMm * s);
+                int margin = (int)(Band * s);
                 if (margin > 0)
                     Cv2.Rectangle(mask, new Rect(0, 0, mask.Cols, mask.Rows), Scalar.All(0), 2 * margin);
 
