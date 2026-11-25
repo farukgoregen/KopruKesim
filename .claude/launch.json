@@ -14,6 +14,30 @@
       "port": 5091
     },
     {
+      "name": "kopru-kesim-deneme",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["C:/Users/faruk/AppData/Local/Temp/claude/5428121e9fc12be2/6d2683ce-396e-4329-8aa9-545ce347c955/scratchpad/webbuild/KopruKesim.Web.dll", "--contentRoot", "C:/Users/faruk/AppData/Local/Temp/claude/5428121e9fc12be2/6d2683ce-396e-4329-8aa9-545ce347c955/scratchpad/webroot", "--urls", "http://localhost:5092"],
+      "port": 5092
+    },
+    {
+      "name": "kopru-kesim-l",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["C:/Users/faruk/AppData/Local/Temp/claude/5428121e9fc12be2/4bd8caa1-8995-42eb-9ed9-d39627c99baf/scratchpad/webout/KopruKesim.Web.dll", "--contentRoot", "C:/Users/faruk/AppData/Local/Temp/claude/5428121e9fc12be2/4bd8caa1-8995-42eb-9ed9-d39627c99baf/scratchpad/webout", "--urls", "http://localhost:5093", "--veri", "C:/Users/faruk/AppData/Local/Temp/claude/5428121e9fc12be2/4bd8caa1-8995-42eb-9ed9-d39627c99baf/scratchpad/veri"],
+      "port": 5093
+    },
+    {
+      "name": "kopru-kesim-kenar",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["C:/Users/faruk/AppData/Local/Temp/claude/5428121e9fc12be2/5fd8de05-e627-440f-8f0d-3fc4e741e335/scratchpad/webout/KopruKesim.Web.dll", "--contentRoot", "C:/Users/faruk/AppData/Local/Temp/claude/5428121e9fc12be2/5fd8de05-e627-440f-8f0d-3fc4e741e335/scratchpad/webout", "--urls", "http://localhost:5094", "--veri", "C:/Users/faruk/AppData/Local/Temp/claude/5428121e9fc12be2/5fd8de05-e627-440f-8f0d-3fc4e741e335/scratchpad/veri"],
+      "port": 5094
+    },
+    {
+      "name": "kopru-kesim-duzelt",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["C:/Users/faruk/AppData/Local/Temp/claude/5428121e9fc12be2/5fd8de05-e627-440f-8f0d-3fc4e741e335/scratchpad/webout-duzelt/KopruKesim.Web.dll", "--contentRoot", "C:/Users/faruk/AppData/Local/Temp/claude/5428121e9fc12be2/5fd8de05-e627-440f-8f0d-3fc4e741e335/scratchpad/webout-duzelt", "--urls", "http://localhost:5095", "--veri", "C:/Users/faruk/AppData/Local/Temp/claude/5428121e9fc12be2/5fd8de05-e627-440f-8f0d-3fc4e741e335/scratchpad/veri"],
+      "port": 5095
+    },
+    {
       "name": "jarvis-main",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "C:/Users/faruk/OneDrive/Desktop/jarvis-main/server", "start"],

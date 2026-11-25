@@ -275,6 +275,7 @@
           <button type="button" data-k="5">5</button><button type="button" data-k="10">10</button><button type="button" data-k="20">20</button><button type="button" data-k="30">30</button>
         </div>
       </div>
+      <label class="ipucu-kucuk"><input id="olcumIzi" type="checkbox" autocomplete="off"> Ölçüm izini kaydet</label>
       <button class="dugme buyuk" id="kamOlc" hidden style="width: 100%; margin-top: 10px">IP kameradan fotoğraf çek ve ölç</button>
       <div class="ana-dugmeler">
         <button class="dugme buyuk ikincil" id="olcDugme">Fotoğraf yükle</button>
@@ -402,7 +403,11 @@
     const veri = await r.json().catch(() => ({ hata: r.status === 404
       ? "Sunucu bu özelliği tanımıyor: çalışan sunucu eski sürüm. Sunucu penceresini kapatıp KopruKesim.cmd ile yeniden başlatın."
       : "Sunucudan anlaşılır bir yanıt gelmedi." }));
-    if (!r.ok) throw new Error(veri.hata || "İstek başarısız oldu.");
+    if (!r.ok) {
+      const error = new Error(veri.hata || "İstek başarısız oldu.");
+      if (veri.iz) error.iz = veri.kayit;
+      throw error;
+    }
     return veri;
   }
   function hata(mesaj, kaydir = true) {
@@ -417,6 +422,7 @@
     f.append("kalinlik", String(Math.max(0, parseFloat(String($("kalinlik").value).replace(",", ".")) || 0)));
     f.append("tekrenk", "0");        // ahsap tabla: tek renkli yuzey ayari kullanilmiyor
     f.append("kalibrasyon", "1");    // tabla olcusu ve lens kayitli kalibrasyondan
+    if ($("olcumIzi").checked) f.append("olcumIzi", "1");
     return f;
   }
 
@@ -430,9 +436,13 @@
       sonFoto = dosya;
       if (gecis) gorunum = "olcum";
       ciz(); sonucYaz();
+      if (f.has("olcumIzi") && !sonOlcum.iz) hata("Ölçüm tamamlandı, ancak ölçüm izi kaydedilemedi.", false);
       // Telefonda sonuc ayarlarin altinda kalir: goruntuye kaydir
       if (window.matchMedia("(max-width: 900px)").matches) $("sahne").scrollIntoView({ behavior: "smooth", block: "start" });
-    } catch (e) { hata(e.message); }
+    } catch (e) {
+      hata(e.message);
+      if (e.iz) $("hata").append(" ", izBaglantisi(e.iz, "Ölçüm izini indir"));
+    }
     finally { $("sahne").classList.remove("calisiyor"); }
   }
 
@@ -1064,12 +1074,26 @@
     if ((e.key === "o" || e.key === "O") &&!e.ctrlKey && !e.altKey && !e.metaKey && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) tumOlculeriDegistir();
   });
 
+  function izBaglantisi(id, metin, maske = false) {
+    const link = document.createElement("a");
+    link.href = "/api/olc/iz/" + encodeURIComponent(id) + (maske ? "?maske=true" : "");
+    link.textContent = metin;
+    return link;
+  }
+
   function sonucYaz() {
     const kutu = $("sonuc"); kutu.replaceChildren();
     if (!sonOlcum) return;
     const tb = $("tumOlcuDugme");
     tb.hidden = false; tb.setAttribute("aria-pressed", tumOlculer);
     tb.onclick = tumOlculeriDegistir;
+    if (sonOlcum.iz) {
+      const d = document.createElement("div");
+      d.className = "parca";
+      d.append(izBaglantisi(sonOlcum.kayit, "Ölçüm izini indir"));
+      if (sonOlcum.izMaske) d.append(" · ", izBaglantisi(sonOlcum.kayit, "Fark maskesini indir", true));
+      kutu.append(d);
+    }
     if (sonOlcum.uyarilar && sonOlcum.uyarilar.length) {
       const u = document.createElement("div"); u.className = "uyari";
       u.innerHTML = "<h3>Ölçüm sapabilir</h3>" + sonOlcum.uyarilar.map(m => `<p>${m}</p>`).join("");

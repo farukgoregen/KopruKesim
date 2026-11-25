@@ -209,8 +209,19 @@ namespace KopruKesim.Vision
         /// Kenar boyunca profiller: icerideki (parca) rengin ortancasi alinir, her profilde disari dogru o renkten
         /// uc ardisik adim boyunca belirgin farkli olunan ilk yer kenardir; noktalara aykirilari atarak cizgi oturtulur.
         /// </summary>
+        // Kenar siluette dogrulanmadiysa ust yuzeyde, maske kullanmadan ayni renk profiliyle yeniden ara.
+        internal static bool TryRefineTopEdge(Point2 a, Point2 b, double across, Func<Point2[], Vec3b[]> sampler,
+            out Point2 lineP, out Point2 lineD, out string why)
+        {
+            double length = Point2.Distance(a, b);
+            Point2 dir = (b - a) * (1 / length);
+            Point2 normal = new Point2(dir.Y, -dir.X);
+            return FitEdge(a, dir, normal, length, Math.Min(60, 0.25 * across), 30,
+                sampler, out lineP, out lineD, out why, true);
+        }
+
         private static bool FitEdge(Point2 a, Point2 dir, Point2 outward, double len, double inward, double outRange,
-            Func<Point2[], Vec3b[]> sampler, out Point2 lineP, out Point2 lineD, out string why)
+            Func<Point2[], Vec3b[]> sampler, out Point2 lineP, out Point2 lineD, out string why, bool verifyCoverage = false)
         {
             lineP = a; lineD = dir; why = null;
             int n = Samples, k = (int)Math.Ceiling(inward + outRange) + 1;
@@ -251,7 +262,27 @@ namespace KopruKesim.Vision
             if (Debug) Console.WriteLine("    renk profili: ic renk L{0:F0} a{1:F0} b{2:F0}, kenar (mm, disari): {3}", rl, ra, rb,
                 string.Join(" ", found.Select(f => Point2.Dot(f - a, outward).ToString("F0"))));
             if (found.Count < n * 0.6) { why = string.Format("profillerin {0}/{1} kenari buldu", found.Count, n); return false; }
-            return FitRobust(found, n, dir, out lineP, out lineD, out why);
+            if (!FitRobust(found, n, dir, out lineP, out lineD, out why)) return false;
+            if (!verifyCoverage) return true;
+
+            // Gecisler iki ucu da desteklemeli. Bir cita ucundaki kisa cizgi tum kenar yerine kullanilmaz.
+            Point2 p = lineP, d = lineD;
+            var support = found.Where(q => Math.Abs(Point2.Cross(q - p, d)) <= 4).ToArray();
+            int nearStart = support.Count(q => Point2.Dot(q - a, dir) <= len / 3);
+            int nearEnd = support.Count(q => Point2.Dot(q - a, dir) >= 2 * len / 3);
+            var original = found.Where(q => Math.Abs(Point2.Dot(q - a, outward)) <= 4).ToArray();
+            bool originalSupported = original.Length >= n * 2 / 3
+                && original.Count(q => Point2.Dot(q - a, dir) <= len / 3) >= 3
+                && original.Count(q => Point2.Dot(q - a, dir) >= 2 * len / 3) >= 3;
+            why = string.Format("{0}/{1} profil, uclarda {2}/{3}; mevcut {4}/{1}{5}", support.Length, n,
+                nearStart, nearEnd, original.Length, originalSupported ? " korundu" : "");
+            if (originalSupported)
+            {
+                lineP = a;
+                lineD = dir;
+                return true;
+            }
+            return support.Length >= n * 2 / 3 && nearStart >= 3 && nearEnd >= 3;
         }
 
         /// <summary>

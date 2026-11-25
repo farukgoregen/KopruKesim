@@ -76,6 +76,7 @@ namespace KopruKesim.Vision
         public bool RefineEdges = true;
         /// <summary>Kenar oturtmada noktanin kenara dik yonde aranacagi yaricap (mm).</summary>
         public double RefineSearchMm = 6;
+        public Action<byte[]> CaptureTraceMask;
         /// <summary>Kenar basina nokta sayisi.</summary>
         public int RefinePointsPerEdge = 15;
         /// <summary>
@@ -639,6 +640,7 @@ namespace KopruKesim.Vision
         /// kenar seridine giren parca kenarlari fotografta aranir (BorderEdgeFinder); verilmezse o parcalar uyariyla doner.
         /// </summary>
         public Func<Point2[], Vec3b[]> PhotoSampler;
+        internal Func<Point2[], Vec3b[]> TopFaceSampler;
 
         /// <summary>
         /// Dedektorun tablasi gercek tablanin her yandan bu kadar (mm) genisletilmisi (TableMeasure.RunWithLens): gercek
@@ -753,12 +755,18 @@ namespace KopruKesim.Vision
             Point2[] d = dense.ToArray();
             SlabResult r = SlabLocator.Locate(d, ScaledLocator(d), _cal.SlabThicknessMm, _cal.Camera);
             if (r == null || r.Vertices == null || r.Vertices.Length != 4) return null;
-            r = RefineInImage(frame, d, r, grad);
+            r = RefineInImage(frame, d, r, grad, retryOnTopFace: found.Assumed == null);
             if (r == null || r.Vertices == null || r.Vertices.Length != 4) return null;
             Assess(r, d);
             // Kaba lekeden kalan kenarlar ve oturtma tutmadiysa olcu bozuk olabilir: karsilikli kenarlar esit olmali.
             // Ici bos tabladan farkli olmali: kenar seridindeki gurultu lekesi 197 x 197 mm'lik "kare" olcu (2026-11-23).
-            if (r.IsReliable && MaskCoverage(found.Quad) < MinBorderQuadMaskCoverage) { r.IsReliable = false; r.Note = EdgeContactNote; }
+            if (r.IsReliable)
+            {
+                double coverage = MaskCoverage(found.Quad);
+                if (_opt.CaptureTraceMask != null)
+                    Console.WriteLine(FormattableString.Invariant($"  [kenar arama kontrol] maske_doluluk={coverage:F3} esik={MinBorderQuadMaskCoverage:F3} kesin_oturan={_refineUsed}/4"));
+                if (coverage < MinBorderQuadMaskCoverage) { r.IsReliable = false; r.Note = EdgeContactNote; }
+            }
             if (r.IsReliable && !IsSplitQuadOk(r))
             {
                 // Karsilikli kenarlar tutarsiz: en sik nedeni yanlis girilen kalinlik (0 mm girilince kalin levhanin yan yuzu
@@ -875,7 +883,8 @@ namespace KopruKesim.Vision
         /// Kalinlik varken kameraya bakan kenarlara dokunulmaz: orada ust yuzey / on yuz / tabla diye iki gecis var ve
         /// en guclusu ust yuzeyin kenari olabilir (siluet alt kenari istenir). Guvenilir sonuc cikmazsa r aynen doner.
         /// </summary>
-        private SlabResult RefineInImage(Mat frame, Point2[] contour, SlabResult r, Func<EdgePointFit.GradientField> grad = null)
+        private SlabResult RefineInImage(Mat frame, Point2[] contour, SlabResult r,
+            Func<EdgePointFit.GradientField> grad = null, bool retryOnTopFace = false)
         {
             _refineUsed = 0;
             if (!_opt.RefineEdges || r.Vertices == null || r.Vertices.Length != 4) return r;
@@ -916,6 +925,7 @@ namespace KopruKesim.Vision
             Point2[] cornersPx = null;
             int used = 0;
             var none = new bool[4];
+            var confirmed = retryOnTopFace && TopFaceSampler != null ? new bool[4] : null;
             // Gradyan (Sobel) tum turlar icin bir kez: 4K karede her turda yeniden hesaplamak olcumu belirgin yavaslatir
             EdgePointFit.GradientField g = null;
             for (int pass = 0; pass < 4; pass++)
@@ -934,6 +944,7 @@ namespace KopruKesim.Vision
                         && Point2.Distance(fe.Points[i], pts[e][i]) <= radius[e]).ToArray();
                     bool spread = ok.Length >= 4 && ok.Max() - ok.Min() >= fe.Points.Length / 4;
                     bool final = ok.Length * 2 >= fe.Points.Length && fe.Straight;
+                    if (confirmed != null) confirmed[e] = refine[e] && final;
                     if (refine[e] && (final || (pass < 3 && spread))) { edges[e] = fe; if (final) used++; }
                     else edges[e] = plain.Edges[e];
                     if (Environment.GetEnvironmentVariable("KK_DEBUG") == "1")
@@ -948,6 +959,15 @@ namespace KopruKesim.Vision
                             : (Point2.Dot(fe.Points[i] - pts[e][i], nrm) * mmPerPx).ToString("+0.0;-0.0", System.Globalization.CultureInfo.InvariantCulture) + (fe.Inlier[i] ? "" : "x")));
                         Console.WriteLine("    [oturtma tur {0} kenar {1}] oturan {2}/{3} duz {4} -> {5}: {6}", pass, e, ok.Length, fe.Points.Length,
                             fe.Straight ? "evet" : "hayir", ReferenceEquals(edges[e], fe) ? (final ? "kesin" : "gecici") : "kaba", marks);
+                        if (_opt.CaptureTraceMask != null)
+                        {
+                            string Points(IEnumerable<Point2> points) => string.Join(" ", points.Select(point =>
+                            {
+                                Point2 mm = _cal.ImageToTable.Transform(point);
+                                return FormattableString.Invariant($"({mm.X - TableInsetMm:F2},{mm.Y - TableInsetMm:F2})");
+                            }));
+                            Console.WriteLine($"      [profil t{pass} k{e} tabla_mm] arama_merkezleri={Points(pts[e])} gecisler={Points(ok.Select(i => fe.Points[i]))}");
+                        }
                     }
                 }
                 var next = new Point2[4];
@@ -978,9 +998,41 @@ namespace KopruKesim.Vision
             SlabResult refined = SlabLocator.Locate(dense, loc, t, cam);
             if (refined == null || refined.Vertices.Length != 4) return r;
             _refineUsed = used;
+            if (confirmed != null && used == 3)
+                refined = RetryTopFaceEdge(refined, cornersMm, Array.IndexOf(confirmed, false), loc);
             RefineLog.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture,
                 "{0}/4 kenar, kose kaymasi {1:F1} px", used, Enumerable.Range(0, 4).Average(i => Point2.Distance(cornersPx[i], vPx[i]))));
             return refined;
+        }
+
+        private SlabResult RetryTopFaceEdge(SlabResult slab, Point2[] silhouette, int missing, LocatorOptions options)
+        {
+            Point2[] v = (Point2[])slab.Vertices.Clone();
+            Point2 mid = (silhouette[missing] + silhouette[(missing + 1) % 4]) * 0.5;
+            // Kalinlik duzeltmesi sonrasi baslangic kosesi degisebilir. Kenari merkezinden eslestir.
+            int i = Enumerable.Range(0, 4).OrderBy(n => Point2.Distance(mid, (v[n] + v[(n + 1) % 4]) * 0.5)).First();
+            int j = (i + 1) % 4, prev = (i + 3) % 4, next = (i + 2) % 4;
+            double across = Math.Min(Point2.Distance(v[prev], v[i]), Point2.Distance(v[j], v[next]));
+            bool found = BorderEdgeFinder.TryRefineTopEdge(v[i], v[j], across, TopFaceSampler, out Point2 p, out Point2 d, out string why);
+            bool debug = Environment.GetEnvironmentVariable("KK_DEBUG") == "1";
+            if (debug) Console.WriteLine("  [ust yuzey] kenar " + i + " " + why + (found ? " destekli" : " yetersiz"));
+            if (!found) return slab;
+
+            Point2 startSide = v[i] - v[prev], endSide = v[j] - v[next];
+            double startCross = Point2.Cross(startSide, d), endCross = Point2.Cross(endSide, d);
+            if (Math.Abs(startCross) < 0.1 * startSide.Length || Math.Abs(endCross) < 0.1 * endSide.Length) return slab;
+            Point2 a = v[prev] + startSide * (Point2.Cross(p - v[prev], d) / startCross);
+            Point2 b = v[next] + endSide * (Point2.Cross(p - v[next], d) / endCross);
+            if (Point2.Distance(a, v[i]) > 30 || Point2.Distance(b, v[j]) > 30) return slab;
+            double inset = TableInsetMm - BorderEdgeFinder.OverhangMm;
+            bool WithinMeasureBoundary(Point2 q) => q.X >= inset && q.Y >= inset
+                && q.X <= _cal.TableLengthMm - inset && q.Y <= _cal.TableWidthMm - inset;
+            if (!WithinMeasureBoundary(a) || !WithinMeasureBoundary(b)) return slab;
+            v[i] = a;
+            v[j] = b;
+            if (PolygonMath.SignedArea(v) <= 0 || !PolygonMath.IsConvex(v)) return slab;
+            _refineUsed++;
+            return SlabLocator.Describe(v, options);
         }
 
         /// <summary>
@@ -1014,6 +1066,8 @@ namespace KopruKesim.Vision
             double fit = contour.Length > 0 ? (double)near / contour.Length : 0;
             if (fit < _opt.MinEdgeFit) notes.Add("kenarlari duz degil");
 
+            if (_opt.CaptureTraceMask != null)
+                Console.WriteLine(FormattableString.Invariant($"  [sekil kontrol] kose={v.Length} doluluk={solidity:F3} min_doluluk={_opt.MinSolidity:F3} kontur_uyumu={fit:F3} min_uyum={_opt.MinEdgeFit:F3} uyum_toleransi_mm={tol:F2}"));
             r.IsReliable = notes.Count == 0;
             r.Note = notes.Count == 0 ? null : "Mermer gibi gorunmuyor: " + string.Join(", ", notes);
         }
@@ -1291,7 +1345,11 @@ namespace KopruKesim.Vision
                 if (kf > k)
                     using (Mat fill = Cv2.GetStructuringElement(MorphShapes.Ellipse, new Size(kf, kf)))
                         Cv2.MorphologyEx(mask, mask, MorphTypes.Close, fill);
-                if (Environment.GetEnvironmentVariable("KK_DEBUG") == "1")
+                if (_opt.CaptureTraceMask != null)
+                {
+                    try { _opt.CaptureTraceMask(mask.ToBytes(".png")); } catch (OpenCVException) { }
+                }
+                else if (Environment.GetEnvironmentVariable("KK_DEBUG") == "1")
                 {
                     try { mask.SaveImage(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "kk_maske.png")); } catch (OpenCVException) { }
                 }

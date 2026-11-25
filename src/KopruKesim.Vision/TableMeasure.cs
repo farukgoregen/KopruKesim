@@ -118,6 +118,9 @@ namespace KopruKesim.Vision
                     else detector.SetTableColorAuto(canvas);
                     // Tablanin kenarina dayanan parcanin kenari orijinal fotografta aranir (tablanin disi da gorunur)
                     detector.PhotoSampler = pts => BorderEdgeFinder.SamplePhoto(frame, work, pts);
+                    detector.TopFaceSampler = thicknessMm > 0
+                        ? pts => BorderEdgeFinder.SamplePhoto(frame, work, pts, thicknessMm)
+                        : detector.PhotoSampler;
                     output.Slabs = detector.Detect(canvas);
                     foreach (SlabResult s in output.Slabs) Shift(s, -m);
                     // Ust yuze oturtma (TopFaceSnapper) 2026-11-24'te kaldirildi: 5 mm plakada yan yuz gorunmuyor, adim tahta
