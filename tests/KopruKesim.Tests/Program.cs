@@ -389,9 +389,48 @@ static class Program
 
     }
 
+    static void TestEdgeCurve()
+    {
+        Console.WriteLine("Tabla kenar egrisi:");
+        Point2[] truth = { new Point2(0, 1990), new Point2(3294, 1990), new Point2(0, 0), new Point2(3294, 0) };
+        // Model kenarlari egri goruyor: ust kenarin ortasi 12 mm disarida, sol kenarin ortasi 6 mm disarida
+        Func<Point2, Point2> warp = p =>
+        {
+            double u = p.X / 3294, v = p.Y / 1990;
+            return new Point2(p.X - 4 * u * (1 - u) * 0 - (1 - u) * 4 * v * (1 - v) * 6, p.Y + v * 4 * u * (1 - u) * 12);
+        };
+        Point2[] measured = truth.Select(warp).ToArray();
+        // Ust kenar (a, b) = (48, 0): f(0,5) = 12; sol kenar (24, 0): f(0,5) = 6 (disari +)
+        var curve = new double[] { 0, 0, 0, 0, 48, 0, 24, 0 };
+        var corr = new TableCorrection(measured, truth, new Point2(1647, 995), 0, curve);
+        double cornerErr = truth.Select((t, i) => Point2.Distance(corr.Apply(measured[i]), t)).Max();
+        Console.WriteLine("    kose farki en fazla {0:E1} mm (sapma izgarasi 5 mm adimla okunur)", cornerErr);
+        Check(cornerErr < 1e-3, "kenar egrisiyle koseler tam oturur");
+        double topMid = corr.Apply(warp(new Point2(1647, 1990))).Y, leftMid = corr.Apply(warp(new Point2(0, 995))).X;
+        Console.WriteLine("    ust kenar ortasi y={0:F2} (1990 olmali), sol kenar ortasi x={1:F2} (0 olmali)", topMid, leftMid);
+        Check(Math.Abs(topMid - 1990) < 0.2 && Math.Abs(leftMid) < 0.2, "egri kenarlar duz tabla kenarina oturur");
+        double maxRound = 0;
+        for (int i = 0; i <= 20; i++) for (int j = 0; j <= 20; j++)
+            {
+                var t = new Point2(-30 + 3354 * i / 20.0, -30 + 2050 * j / 20.0);
+                maxRound = Math.Max(maxRound, Point2.Distance(corr.Apply(corr.Invert(t)), t));
+            }
+        Check(maxRound < 1e-5, "kenar egrili ters donusum");
+        var lc = new LensCalibration { ImageWidth = 10, ImageHeight = 10, Fx = 1, Fy = 1, Correction = corr, LWallMm = 5 };
+        string tmp = Path.Combine(Path.GetTempPath(), "kk_kenar_egrisi.txt");
+        lc.Save(tmp);
+        LensCalibration back = LensCalibration.Load(tmp);
+        File.Delete(tmp);
+        Point2 q = new Point2(812.3, 1702.5);
+        Check(back.LWallMm == 5 && back.Correction.EdgeCurve != null && Near(back.Correction.Apply(q), corr.Apply(q), 1e-9), "kenar egrisi ve L duvari kayitta saklanir");
+        var shifted = lc.WithTableMargin(30).Correction;
+        Check(Near(shifted.Apply(q), corr.Apply(q) + new Point2(30, 30), 1e-6), "tabla payinda kenar egrisi korunur");
+    }
+
     static int Main()
     {
         TestTableCorrection();
+        TestEdgeCurve();
         TestHomography();
         TestLensCalibrationFile();
         TestPlanarBundle();

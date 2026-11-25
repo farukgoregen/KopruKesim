@@ -45,7 +45,7 @@ namespace KopruKesim.Core
         public Point2[] PaperCorners;
         /// <summary>Tabla koselerinin kaynagi: "kagit" (kose kagitlarinin dis koseleri) ya da "mavi" (mavi paspaslarin dis koseleri).</summary>
         public string CornerSource = CornerSourcePaper;
-        public const string CornerSourcePaper = "kagit", CornerSourceMats = "mavi";
+        public const string CornerSourcePaper = "kagit", CornerSourceMats = "mavi", CornerSourceL = "L";
         /// <summary>
         /// Modelin tabladaki kalan hatasini seritle olculen tablaya gore duzelten alan (paspasli kalibrasyon); yoksa null.
         /// LensCalibrator.ImageToTable / TableToImage bunu kendisi uygular: disaridan bakinca tabla mm'si gercek tabladir.
@@ -58,6 +58,12 @@ namespace KopruKesim.Core
         /// hesaplandi (-1,64e-9); yoksa 0 (duzeltme yalniz koseleri oturtur).
         /// </summary>
         public double ResidualRadial;
+        /// <summary>
+        /// L kose kalibrasyonunda L parcasinin dis duvari (mm): tablanin koseleri L'nin dis kenarlarinin bu kadar icinde,
+        /// seritle olculen L dis koseleri de bu kadar iceri alinarak gercek tabla koseleri bulunur. 0: eski kayit (L'nin dis
+        /// kosesi tabla kosesi sayiliyordu).
+        /// </summary>
+        public double LWallMm;
 
         /// <summary>Ayni kalibrasyonun duzeltmesiz kopyasi (modelin ham ciktisi gerektiginde).</summary>
         public LensCalibration WithoutCorrection()
@@ -84,7 +90,8 @@ namespace KopruKesim.Core
                 : new[] { new Point2(0, 0), new Point2(TableLengthMm, 0), new Point2(0, TableWidthMm), new Point2(TableLengthMm, TableWidthMm) };
             Point2[] truth = Correction != null ? Correction.True : model;
             c.Correction = new TableCorrection(model, truth.Select(p => p + shift).ToArray(),
-                Correction != null ? Correction.Center : new Point2(TableLengthMm / 2, TableWidthMm / 2), Correction != null ? Correction.E : 0);
+                Correction != null ? Correction.Center : new Point2(TableLengthMm / 2, TableWidthMm / 2), Correction != null ? Correction.E : 0,
+                Correction?.EdgeCurve);   // kenar egrisi (u, v) parametresine bagli: kaydirmada ayni kalir
             return c;
         }
 
@@ -147,8 +154,12 @@ namespace KopruKesim.Core
             lines.Add("KoseKaynagi=" + CornerSource);
             if (ResidualRadial != 0)
                 lines.Add("KalanBukulme=" + ResidualRadial.ToString("R", c));
+            if (LWallMm != 0)
+                lines.Add("LDuvarMm=" + LWallMm.ToString("R", c));
             if (Correction != null)
                 lines.Add("TablaDuzeltme=" + arr(Correction.ToValues()));
+            if (Correction?.EdgeCurve != null)
+                lines.Add("TablaKenarEgrisi=" + arr(Correction.EdgeCurve));
             System.IO.File.WriteAllLines(path, lines);
         }
 
@@ -157,6 +168,7 @@ namespace KopruKesim.Core
             var c = CultureInfo.InvariantCulture;
             var cal = new LensCalibration();
             Func<string, double[]> arr = s => s.Split(',').Select(v => double.Parse(v, c)).ToArray();
+            double[] edgeCurve = null;
             foreach (string raw in System.IO.File.ReadAllLines(path))
             {
                 string line = raw.Trim();
@@ -207,9 +219,11 @@ namespace KopruKesim.Core
                         cal.PaperCorners = Enumerable.Range(0, 4).Select(i => new Point2(pc[2 * i], pc[2 * i + 1])).ToArray();
                         break;
                     case "KenarMm": cal.EdgeRmsMm = double.Parse(val, c); break;
-                    case "KoseKaynagi": cal.CornerSource = val == CornerSourceMats ? CornerSourceMats : CornerSourcePaper; break;
+                    case "KoseKaynagi": cal.CornerSource = val == CornerSourceMats ? CornerSourceMats : val == CornerSourceL ? CornerSourceL : CornerSourcePaper; break;
                     case "KalanBukulme": cal.ResidualRadial = double.Parse(val, c); break;
+                    case "LDuvarMm": cal.LWallMm = double.Parse(val, c); break;
                     case "TablaDuzeltme": cal.Correction = TableCorrection.FromValues(arr(val)); break;
+                    case "TablaKenarEgrisi": edgeCurve = arr(val); break;
                     case "Nokta": cal.Points = int.Parse(val, c); break;
                     case "Etiket": cal.TagType = val; break;
                     default: break;   // ileride eklenecek alanlar eski surumu bozmasin
@@ -217,6 +231,12 @@ namespace KopruKesim.Core
             }
             if (cal.ImageWidth <= 0 || cal.Fx <= 0 || cal.Rvec.Length != 3 || cal.Tvec.Length != 3)
                 throw new FormatException("Kalibrasyon dosyasi eksik: " + path);
+            // Kenar egrisi tabla duzeltmesine baglidir (satir sirasi onemli olmasin diye sonda kurulur)
+            if (edgeCurve != null && cal.Correction != null)
+            {
+                TableCorrection k = cal.Correction;
+                cal.Correction = new TableCorrection(k.Measured, k.True, k.Center, k.E, edgeCurve);
+            }
             return cal;
         }
     }
