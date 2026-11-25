@@ -97,6 +97,13 @@ Kullanıcı köşelere önce açık mavi kâğıt, sonra koyu mavi oluklu paspas
 - Yan etki ve çözümü: sağ alttaki siyah plaka dışarı taşan çıtaların üstünde, köşesi Y = −8 mm; dedektör yalnız çerçevenin içine baktığı için bir kenarı 571 yerine 563 ölçüldü. Ölçüm alanı her yandan `DetectorOptions.OuterMarginMm` = 30 mm genişletildi (`LensCalibration.WithTableMargin`, `SlabDetector.TableInsetMm`): kenar şeridi, kenara dayanma, taşma (20 mm) ve kenara hizalama yine gerçek kenara göre. 0 mm ile eski kalibrasyon sunucu sonuçlarını birebir verdi (7 ölçüm); yeni köşeler + 30 mm ile ölçüler ±1,3 mm aynı, siyah plaka 1463 × 573-574, konumlar Y'de ~10 mm kaydı.
 - Kalan: (0,0) gevşek bir çıtanın köşesi; çıtalar kayarsa sıfır kayar (sabit bir köşe aparatı düşünülüyor). Ortadaki plakada sağ kenar oturtması tutmayınca kaba kenara düşüyor (1466/567/1483/570).
 
+## L köşe parçaları (2026-11-25)
+- Köşe aparatı: 3D baskı turkuaz L, dört köşeye oturur, dış köşesi pahlı. Kullanıcı kararı: paspas kalibrasyonu tamamen kaldırıldı (`MatCalibrator`, `BlueMatFinder`, `LensCalibrator` paspas dalı silindi); arayüzde yalnız L köşe kalibrasyonu ve boş tabla. Boş tabla artık yalnız referans fotoğraf (kenar aramaz; `TableEdgeFinder` çağrılmıyor).
+- Renk: kamerada L ton 86–91 (OpenCV), mavimsi zemin ~100, yeşil boya serit ayrı; ilk denemede ton 74–102 ile üst kenarda profiller zemine takıldı (rms 6–11 mm). Ton 80–94 + profilleri maskenin kaba dış sınırının ±10 mm'siyle sınırlamak: uzun kenarlar rms 0,65–1,13 mm, kısa kenarlar 0,43–2,35 mm (2000 px'ten büyütülmüş fotoğrafta; tam çözünürlüklü L fotoğrafı silinmişti).
+- Kullanıcı: parça kalınlığı ve kol ölçüsü gerekmez, tabla ölçüleri L'ler yerindeyken şeritle (alt 3304, üst 3309, sol 2000, sağ 2000, sol alt → sağ üst 3861; sol üst → sağ alt 3869). Doğrulama ölçütü yalnız kenarların L'nin dış kenarına oturması; ölçü karşılaştırması istenmedi (ikinci köşegen kontrolü kaldırıldı).
+- Şerit ölçüsü değişince fotoğrafsız yeniden oturtma (`/api/kalibrasyon/tabla`) ve son fotoğrafın yeniden ölçülmesi (kalınlık gibi). Deneme: alt 3304 → 3404 → 3304, sonuç geri birebir aynı.
+- Açık: sol üst / sağ üst L'nin dış yan kenarında koyu mavi ince şerit görünüyor (duvar mı gölge mi); çizgi turkuaz sınırında. Tam çözünürlüklü fotoğrafla bakılacak.
+
 ## 2026-11-21 öncesi CLAUDE.md özeti (dama etiketli ve damasız modlar kaldırılmadan önce)
 Web arayüzünde yalnız Kalibrasyonlu ve Damasız kalibrasyon kaldı; Dama etiketli, Damasız (otomatik/elle/kayıtlı tabla), iki fotoğraflı ölçüm, Demo konsolu ve bunlara ait sınıflar (TableFinder, LineTableFinder, TableMatcher, DiagonalCorners, LensCorrection, HalfViewSolver, TableProfile, CheckerGridFit, MarkerSolver) silindi. Aşağısı o tarihteki CLAUDE.md metnidir (değiştirilmeden).
 

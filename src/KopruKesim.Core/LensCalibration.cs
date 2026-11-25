@@ -45,7 +45,7 @@ namespace KopruKesim.Core
         public Point2[] PaperCorners;
         /// <summary>Tabla koselerinin kaynagi: "kagit" (kose kagitlarinin dis koseleri) ya da "mavi" (mavi paspaslarin dis koseleri).</summary>
         public string CornerSource = CornerSourcePaper;
-        public const string CornerSourcePaper = "kagit", CornerSourceMats = "mavi";
+        public const string CornerSourcePaper = "kagit", CornerSourceMats = "mavi", CornerSourceL = "L";
         /// <summary>
         /// Modelin tabladaki kalan hatasini seritle olculen tablaya gore duzelten alan (paspasli kalibrasyon); yoksa null.
         /// LensCalibrator.ImageToTable / TableToImage bunu kendisi uygular: disaridan bakinca tabla mm'si gercek tabladir.
@@ -207,7 +207,7 @@ namespace KopruKesim.Core
                         cal.PaperCorners = Enumerable.Range(0, 4).Select(i => new Point2(pc[2 * i], pc[2 * i + 1])).ToArray();
                         break;
                     case "KenarMm": cal.EdgeRmsMm = double.Parse(val, c); break;
-                    case "KoseKaynagi": cal.CornerSource = val == CornerSourceMats ? CornerSourceMats : CornerSourcePaper; break;
+                    case "KoseKaynagi": cal.CornerSource = val == CornerSourceMats ? CornerSourceMats : val == CornerSourceL ? CornerSourceL : CornerSourcePaper; break;
                     case "KalanBukulme": cal.ResidualRadial = double.Parse(val, c); break;
                     case "TablaDuzeltme": cal.Correction = TableCorrection.FromValues(arr(val)); break;
                     case "Nokta": cal.Points = int.Parse(val, c); break;

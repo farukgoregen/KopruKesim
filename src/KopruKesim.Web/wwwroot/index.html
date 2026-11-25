@@ -267,36 +267,33 @@
 
     <div class="grup" id="tablaGrup">
       <h2>Tabla</h2>
-      <p class="ipucu-kucuk">Tablanın dört kenarını şeritle ölçüp girin. Tabla boşken boş tablayı kaydedin: program tablanın kenarlarını bu fotoğraftan bulur ve ölçüleri bu kenar uzunluklarına göre yapar. Çıtalar kaydığında ya da ışık belirgin değiştiğinde yeniden kaydedin.</p>
+      <p class="ipucu-kucuk">Tablanın dört kenarını ve sol alt → sağ üst köşegenini, L köşe parçaları yerindeyken dış köşeleri arasından şeritle ölçüp girin. Bir ölçüyü değiştirince kalibrasyon yeni ölçüye göre güncellenir ve son fotoğraf yeniden ölçülür.</p>
       <div class="satir">
-        <label class="alan">Alt kenar (mm)<input id="kalAlt" type="number" min="500" step="0.5" value="3296" inputmode="decimal"></label>
-        <label class="alan">Üst kenar (mm)<input id="kalUst" type="number" min="500" step="0.5" value="3300" inputmode="decimal"></label>
-      </div>
-      <div class="satir">
-        <label class="alan">Sol kenar (mm)<input id="kalSol" type="number" min="500" step="0.5" value="1991" inputmode="decimal"></label>
-        <label class="alan">Sağ kenar (mm)<input id="kalSag" type="number" min="500" step="0.5" value="1988" inputmode="decimal"></label>
+        <label class="alan">Alt kenar (mm)<input id="kalAlt" type="number" min="500" step="0.5" value="3304" inputmode="decimal"></label>
+        <label class="alan">Üst kenar (mm)<input id="kalUst" type="number" min="500" step="0.5" value="3309" inputmode="decimal"></label>
       </div>
       <div class="satir">
-        <label class="alan">Köşegen, sol alt → sağ üst (mm)<input id="kalKosegen" type="number" min="500" step="0.5" value="3850" placeholder="boş: sol alt köşe dik" inputmode="decimal"></label>
+        <label class="alan">Sol kenar (mm)<input id="kalSol" type="number" min="500" step="0.5" value="2000" inputmode="decimal"></label>
+        <label class="alan">Sağ kenar (mm)<input id="kalSag" type="number" min="500" step="0.5" value="2000" inputmode="decimal"></label>
       </div>
-      <div class="satir" style="margin-top: 8px">
-        <button type="button" class="dugme ikincil" id="bosKamera" hidden>IP kameradan boş tablayı kaydet</button>
-        <button type="button" class="dugme ikincil" id="bosYukle">Boş tabla fotoğrafı yükle</button>
+      <div class="satir">
+        <label class="alan">Köşegen, sol alt → sağ üst (mm)<input id="kalKosegen" type="number" min="500" step="0.5" value="3861" placeholder="boş: sol alt köşe dik" inputmode="decimal"></label>
       </div>
-      <p class="ipucu-kucuk" id="bosDurum"></p>
       <p class="ipucu-kucuk" id="kalDurum">Kalibrasyon yok.</p>
       <div id="kalDetay" style="margin-top: 14px">
-        <h3 style="margin: 0 0 4px">Paspaslı kalibrasyon (4 paspas)</h3>
-        <p class="ipucu-kucuk">Yalnız ilk kurulumda ya da kamera oynarsa gerekir. Dört mavi paspası tablanın köşelerine koyun: dış köşesi tabla köşesine tam dayalı, uzun kenarı tablanın uzun kenarı boyunca. Tabla boşken kalibrasyon fotoğrafını çekin, sonra paspasları kaldırıp boş tablayı kaydedin. Lens bükülmesi kameranın kayıtlı lens bilgisinden alınır.</p>
-        <div class="satir">
-          <label class="alan">Paspas uzun (mm)<input id="kalPaspasUzun" type="number" min="50" step="1" value="435" inputmode="decimal"></label>
-          <label class="alan">Paspas kısa (mm)<input id="kalPaspasKisa" type="number" min="30" step="1" value="150" inputmode="decimal"></label>
-          <label class="alan">Paspas kalınlık (mm)<input id="kalPaspasKalinlik" type="number" min="0" step="0.5" value="4.5" inputmode="decimal"></label>
-        </div>
+        <h3 style="margin: 0 0 4px">1. L köşe kalibrasyonu</h3>
+        <p class="ipucu-kucuk">Dört turkuaz L parçasını tablanın köşelerine tam oturtun. Tabla boşken kalibrasyon fotoğrafını çekin: program L'lerin dış kenarlarından tablanın köşelerini bulur ve yukarıdaki şerit ölçülerine oturtur. Lens bükülmesi ve kamera konumu kayıtlı kalibrasyondan alınır.</p>
         <div class="satir" style="margin-top: 8px">
-          <button type="button" class="dugme ikincil" id="kalYukle">Kalibrasyon fotoğrafı yükle</button>
           <button type="button" class="dugme ikincil" id="kalKamera" hidden>IP kameradan kalibre et</button>
+          <button type="button" class="dugme ikincil" id="kalYukle">Kalibrasyon fotoğrafı yükle</button>
         </div>
+        <h3 style="margin: 14px 0 4px">2. Boş tabla</h3>
+        <p class="ipucu-kucuk">Tabla ölçüm sırasındaki haliyle boşken kaydedin (L parçaları tablada kalacaksa onlarla). Ölçümde yalnız boş tabladan farklı yerler parça sayılır. Çıtalar kaydığında ya da ışık belirgin değiştiğinde yeniden kaydedin.</p>
+        <div class="satir" style="margin-top: 8px">
+          <button type="button" class="dugme ikincil" id="bosKamera" hidden>IP kameradan boş tablayı kaydet</button>
+          <button type="button" class="dugme ikincil" id="bosYukle">Boş tabla fotoğrafı yükle</button>
+        </div>
+        <p class="ipucu-kucuk" id="bosDurum"></p>
       </div>
     </div>
 
@@ -775,7 +772,8 @@
   $("sekmeOlcum").onclick = () => { if (sonOlcum) { gorunum = "olcum"; ciz(); } };
 
   // Tabla olculeri ve kalinlik tarayicida hatirlanir
-  const AYAR = ["kalinlik", "kalAlt", "kalUst", "kalSol", "kalSag", "kalKosegen", "kalPaspasUzun", "kalPaspasKisa", "kalPaspasKalinlik"];
+  const AYAR = ["kalinlik", "kalAlt", "kalUst", "kalSol", "kalSag", "kalKosegen"];
+  const TABLA_ALAN = [["alt", "kalAlt"], ["ust", "kalUst"], ["sol", "kalSol"], ["sag", "kalSag"], ["kosegen", "kalKosegen"]];
 
   // ---------- IP kamera ----------
   // Adres, port, kullanici, kanal ve akis tarayicida hatirlanir; sifre hatirlanmaz (yalniz sunucu belleginde).
@@ -924,7 +922,7 @@
     canvas.replaceChildren(panel);
     $("ipucu").textContent = "";
     if (!cameraCalibrated) {
-      panel.textContent = "Henüz kayıtlı kalibrasyon yok. Paspasları dört köşeye koyup kalibrasyon fotoğrafını yükleyin (ya da IP kameradan alın), ardından boş tabla fotoğrafını kaydedin.";
+      panel.textContent = "Henüz kayıtlı kalibrasyon yok. L parçalarını dört köşeye koyup kalibrasyon fotoğrafını yükleyin (ya da IP kameradan alın), ardından boş tabla fotoğrafını kaydedin.";
       return;
     }
     let result;
@@ -934,26 +932,35 @@
 
     const k = result.kalibrasyon, L = k.tabla.uzunluk, W = k.tabla.genislik;
     const buttons = document.createElement("div"); buttons.className = "dugmeler";
+    const cornerButton = document.createElement("button");
     const photoButton = document.createElement("button");
     const topButton = document.createElement("button");
-    photoButton.textContent = "Kamera karesi"; topButton.textContent = "Düzeltilmiş tabla";
-    for (const button of [photoButton, topButton]) {
+    cornerButton.textContent = "L köşeleri (yakın)"; photoButton.textContent = "Kamera karesi"; topButton.textContent = "Düzeltilmiş tabla";
+    for (const button of result.lKoseler ? [cornerButton, photoButton, topButton] : [photoButton, topButton]) {
       button.type = "button"; button.className = "dugme ikincil"; buttons.append(button);
     }
     const details = document.createElement("p");
     details.textContent = "Tabla " + sayi(L) + " × " + sayi(W) + " mm · "
-      + (result.fotoKaynagi === "bos" ? "boş tabla fotoğrafı" : "kalibrasyon fotoğrafı (boş tabla henüz kaydedilmedi)");
+      + (result.fotoKaynagi === "bos" ? "boş tabla fotoğrafı" : "kalibrasyon fotoğrafı");
     const legend = document.createElement("p");
     legend.className = "ipucu";
-    legend.textContent = "Sarı çizgi: tabla kenarı. Köşeler boş tabla fotoğrafında köşe çıtalarının ucundan bulunur; aradaki çıtaların girintisi çıkıntısı çizgiyi etkilemez."
-      + " Kırmızı halkalar: şeritle ölçülen tabla köşeleri. (0,0): sol alt köşe.";
     const visual = document.createElement("div");
     panel.replaceChildren(details, buttons, visual, legend);
 
-    let rectified = false;
+    let rectified = false, corners = Boolean(result.lKoseler);
     function show() {
-      photoButton.setAttribute("aria-pressed", !rectified);
-      topButton.setAttribute("aria-pressed", rectified);
+      cornerButton.setAttribute("aria-pressed", corners);
+      photoButton.setAttribute("aria-pressed", !corners && !rectified);
+      topButton.setAttribute("aria-pressed", !corners && rectified);
+      legend.textContent = corners
+        ? "Dört köşe 3 kat büyütülmüş. Mor noktalar: L parçasının dış kenarında bulunan renk geçişleri. Sarı çizgiler: bu noktalara oturtulan iki dış kenar. Kırmızı halka: tabla köşesi (iki kenarın kesişimi). Sarı çizgiler L'nin dış kenarının tam üstünde olmalı."
+        : "Sarı çizgi: tabla kenarı (L köşelerinden). Kırmızı halkalar: şeritle ölçülen tabla köşeleri. (0,0): sol alt köşe.";
+      if (corners) {
+        const img = document.createElement("img");
+        img.src = result.lKoseler; img.alt = "L köşe parçaları, bulunan kenarlar"; img.style.width = "100%";
+        visual.replaceChildren(img);
+        return;
+      }
       const w = rectified ? L : k.goruntu.w, h = rectified ? W : k.goruntu.h;
       const point = ([x, y]) => [x, rectified ? h - y : y];
       const pad = Math.max(w, h) / 80;
@@ -980,8 +987,9 @@
       visual.replaceChildren(svg);
     }
 
-    photoButton.onclick = () => { rectified = false; show(); };
-    topButton.onclick = () => { rectified = true; show(); };
+    cornerButton.onclick = () => { corners = true; show(); };
+    photoButton.onclick = () => { corners = false; rectified = false; show(); };
+    topButton.onclick = () => { corners = false; rectified = true; show(); };
     show();
   }
 
@@ -994,23 +1002,41 @@
     if (changed) ciz(); else durumYaz();
     $("bosDurum").textContent = !available ? ""
       : k.bosTabla ? `Boş tabla kayıtlı (${k.bosTablaTarih}).` : "Boş tabla henüz kaydedilmedi: ölçmeden önce tabla boşken kaydedin.";
+    const lKose = available && k.koseKaynagi === "L";
     $("kalDurum").textContent = !available
-      ? "Kamera kalibrasyonu yok. Aşağıdaki Kamera kalibrasyonu adımını yapın."
-      : `${k.referansUygun === false ? "Kalibrasyon hatası yüksek; yeniden kalibre edin. " : ""}Kamera kalibrasyonu ${k.tarih}: tabla ${sayi(k.tabla.uzunluk)} × ${sayi(k.tabla.genislik)} mm, kamera yüksekliği ${sayi(k.kamera.z)} mm.`;
+      ? "Kamera kalibrasyonu yok. Aşağıdaki L köşe kalibrasyonu adımını yapın."
+      : `${k.referansUygun === false ? "Kalibrasyon hatası yüksek; yeniden kalibre edin. " : ""}${lKose ? "L köşe kalibrasyonu" : "Kalibrasyon (eski yöntem; L köşe kalibrasyonunu yapın)"} ${k.tarih}: tabla ${sayi(k.tabla.uzunluk)} × ${sayi(k.tabla.genislik)} mm, kamera yüksekliği ${sayi(k.kamera.z)} mm.`;
+    // Kalibrasyondaki serit olculeri alanlara yazilir (sunucudaki gecerli olcu; tarayicida kalan eski degerin yerine)
+    if (lKose && k.seritTabla) {
+      for (const [ad, id] of TABLA_ALAN) if (document.activeElement !== $(id) && k.seritTabla[ad] != null) $(id).value = k.seritTabla[ad];
+      ayarKaydet();
+    }
   }
   async function kalDurumAl() {
     try { kalDurumYaz(await istek("/api/kalibrasyon")); } catch (e) { }
   }
-  // Tablanin seritle olculen kenarlari (kalibrasyon ve bos tabla kaydinda gonderilir)
+  // Tablanin seritle olculen kenarlari ve kosegenleri (L kose kalibrasyonunda gonderilir)
   function tablaOlculeri(f) {
-    for (const [ad, id] of [["alt", "kalAlt"], ["ust", "kalUst"], ["sol", "kalSol"], ["sag", "kalSag"], ["kosegen", "kalKosegen"]]) f.append(ad, $(id).value);
+    for (const [ad, id] of TABLA_ALAN) f.append(ad, $(id).value);
   }
+  // Serit olculeri degisti: L kose kalibrasyonu yeni olculere oturtulur, son fotograf yeniden olculur (kalinlik gibi)
+  async function tablaDegisti() {
+    if (!kalibrasyonBilgi || kalibrasyonBilgi.koseKaynagi !== "L") return;
+    const f = new FormData(); tablaOlculeri(f);
+    hata("");
+    try {
+      const r = await istek("/api/kalibrasyon/tabla", f);
+      kalDurumYaz(r.kalibrasyon);
+      if (sonFoto) await olc(sonFoto, false);
+      else if (gorunum === "kalibrasyon") { $("tuval").replaceChildren(); ciz(); }
+    } catch (e) { hata(e.message); }
+  }
+  TABLA_ALAN.forEach(([, id]) => $(id).addEventListener("change", () => { clearTimeout(tablaDegisti.t); tablaDegisti.t = setTimeout(tablaDegisti, 300); }));
   async function kalibreEt(dosya) {
     const f = new FormData();
     f.append("dosya", dosya);
     tablaOlculeri(f);
-    for (const [ad, id] of [["paspasUzun", "kalPaspasUzun"], ["paspasKisa", "kalPaspasKisa"], ["paspasKalinlik", "kalPaspasKalinlik"]]) f.append(ad, $(id).value);
-    hata(""); $("kalDurum").textContent = "Kalibre ediliyor…";
+    hata(""); $("kalDurum").textContent = "L köşeleri aranıyor…";
     try {
       const r = await istek("/api/kalibrasyon", f);
       gorunum = "kalibrasyon";
@@ -1035,13 +1061,10 @@
   };
   async function bosKaydet(dosya) {
     const f = new FormData(); f.append("dosya", dosya);
-    tablaOlculeri(f);
-    hata(""); $("bosDurum").textContent = "Kaydediliyor, tabla kenarları aranıyor…";
+    hata(""); $("bosDurum").textContent = "Kaydediliyor…";
     try {
       const r = await istek("/api/kalibrasyon/bos", f);
       kalDurumYaz(r.kalibrasyon);
-      if (r.tablaKenari) $("bosDurum").textContent += ` Tabla kenarları bulundu: kamerada alt ${sayi(r.tablaKenari.alt)}, üst ${sayi(r.tablaKenari.ust)}, sol ${sayi(r.tablaKenari.sol)}, sağ ${sayi(r.tablaKenari.sag)} mm; ölçüler girilen kenarlara göre yapılır.`;
-      if (r.uyari) hata(r.uyari);
       if (gorunum === "kalibrasyon") { $("tuval").replaceChildren(); ciz(); }
     } catch (e) { hata(e.message); kalDurumAl(); }
   }

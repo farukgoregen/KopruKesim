@@ -80,7 +80,8 @@ app.UseStaticFiles(new StaticFileOptions
 
 var inv = CultureInfo.InvariantCulture;
 var gate = new object();
-string dataDir = @"D:\SMO\photos";
+// Veri koku; deneme icin "--veri <klasor>" ile degistirilebilir (canli kalibrasyon ve olcumlere dokunmadan)
+string dataDir = app.Configuration["veri"] is string veri && veri.Length > 0 ? veri : @"D:\SMO\photos";
 // Olcum goruntusu (ekran ve olcumler klasoru): tablanin 3300 x 2000 mm'lik alani, 1 piksel = 1 mm
 const double DisplayLengthMm = 3300, DisplayWidthMm = 2000;
 Directory.CreateDirectory(dataDir);
@@ -168,6 +169,8 @@ string emptyPath = Path.Combine(lensDir, "bos.jpg");
 // kalibrasyonda kose damalari paspasin altinda kalir ve lens o fotograftan cozulemez; buradan alinir. "Sil" bunu silmez
 // (lens kameranin ozelligidir; tabla kalibrasyonu silinse de gecerli).
 string cameraLensPath = Path.Combine(lensDir, "kamera-lens.txt");
+// L kose kalibrasyonunun inceleme goruntusu (dort kose buyutulmus, bulunan kenarlar cizili)
+string lCornerViewPath = Path.Combine(lensDir, "l-koseler.jpg");
 LensCalibration LoadCameraLens()
 {
     try { return File.Exists(cameraLensPath) ? LensCalibration.Load(cameraLensPath) : null; }
@@ -195,11 +198,11 @@ static Point2[] TableBorder(double l, double w, int n)
         for (int i = 0; i < n; i++) pts.Add(c[e] + (c[(e + 1) % 4] - c[e]) * ((double)i / n));
     return pts.ToArray();
 }
-// Fotografta cizilecek tabla siniri: paspasli kalibrasyonda bulunan dort koseden (tabla tam dik acili olmayabilir),
-// degilse kalibrasyondaki olcunun dikdortgeni
+// Fotografta cizilecek tabla siniri: L kose kalibrasyonunda seritle olculen dort koseden (tabla tam dik acili
+// olmayabilir), degilse kalibrasyondaki olcunun dikdortgeni
 static Point2[] TableOutline(LensCalibration c, int n)
 {
-    if (c.CornerSource != LensCalibration.CornerSourceMats || c.PaperCorners == null || c.PaperCorners.Length != 4)
+    if (c.Correction == null || c.PaperCorners == null || c.PaperCorners.Length != 4)
         return TableBorder(c.TableLengthMm, c.TableWidthMm, n);
     Point2[] k = { c.PaperCorners[2], c.PaperCorners[0], c.PaperCorners[1], c.PaperCorners[3] };   // sol alt, sol ust, sag ust, sag alt
     var pts = new List<Point2>();
@@ -235,9 +238,18 @@ object LensStatus(LensCalibration c) => c == null ? new { var = false } as objec
         dy = Math.Round(q.p.Y - ExpectedCenters(c)[q.i].Y, 1),
         aci = Math.Round(q.p.RotationDeg, 2)
     }),
-    // Tabla koseleri: "kagit" (kose kagitlarinin dis koseleri) ya da "mavi" (mavi paspaslarin dis koseleri)
+    // Tabla koseleri: "L" (L kose parcalarinin dis koseleri), "kagit" (kose kagitlari) ya da eski "mavi" (paspas)
     koseKaynagi = c.CornerSource,
-    paspasKenarMm = double.IsNaN(c.EdgeRmsMm) ? (double?)null : Math.Round(c.EdgeRmsMm, 2),
+    // Seritle girilen tabla kenarlari (L koseleri arasi)
+    seritTabla = c.Correction == null || c.PaperCorners == null || c.PaperCorners.Length != 4 ? null : new
+    {
+        alt = Math.Round(Point2.Distance(c.PaperCorners[2], c.PaperCorners[3]), 1),
+        ust = Math.Round(Point2.Distance(c.PaperCorners[0], c.PaperCorners[1]), 1),
+        sol = Math.Round(Point2.Distance(c.PaperCorners[2], c.PaperCorners[0]), 1),
+        sag = Math.Round(Point2.Distance(c.PaperCorners[3], c.PaperCorners[1]), 1),
+        kosegen = Math.Round(Point2.Distance(c.PaperCorners[2], c.PaperCorners[1]), 1)
+        // sol ust -> sag alt kosegen yalniz karsilastirma icin girilir, saklanmaz (arayuzdeki deger korunur)
+    },
     kameraLensi = File.Exists(cameraLensPath) ? File.GetLastWriteTime(cameraLensPath).ToString("dd.MM.yyyy HH:mm") : null,
     // Kose kagitlarinin dis koselerinin olusturdugu tabla (mm)
     kagitTabla = c.PaperCorners == null ? null : new
@@ -301,8 +313,9 @@ app.MapGet("/api/kalibrasyon/incele", () =>
     lock (gate)
     {
         LensCalibration cal = LoadLens();
-        // Tabla koseleri bos tabla fotografindan bulunur: varsa o gosterilir, yoksa kalibrasyon fotografi
-        bool fromEmpty = File.Exists(emptyPath);
+        // L kose kalibrasyonunda kalibrasyon fotografi (L'ler gorunur: cerceve L'lerin dis koselerinden gecmeli);
+        // eski yontemlerde varsa bos tabla fotografi
+        bool fromEmpty = File.Exists(emptyPath) && !(cal?.CornerSource == LensCalibration.CornerSourceL && File.Exists(calibrationPhotoPath));
         string shown = fromEmpty ? emptyPath : calibrationPhotoPath;
         if (cal == null || !File.Exists(shown))
             return Fail("İncelenecek kayıtlı kalibrasyon fotoğrafı bulunamadı.");
@@ -324,6 +337,9 @@ app.MapGet("/api/kalibrasyon/incele", () =>
             kalibrasyon = LensStatus(cal),
             fotoKaynagi = fromEmpty ? "bos" : "kalibrasyon",
             foto = Jpeg(frame),
+            // L kose kalibrasyonunun inceleme goruntusu (dort kose buyutulmus, bulunan kenarlar cizili)
+            lKoseler = cal.CornerSource == LensCalibration.CornerSourceL && File.Exists(lCornerViewPath)
+                ? "data:image/jpeg;base64," + Convert.ToBase64String(File.ReadAllBytes(lCornerViewPath)) : null,
             ustten = Jpeg(top),
             cerceve = LensCalibrator.TableToImage(cal, TableOutline(cal, 40)).Select(ValidPoint),
             sifir = ValidPoint(LensCalibrator.TableToImage(cal, new[] { new Point2(0, 0) })[0]),
@@ -343,9 +359,8 @@ app.MapPost("/api/kalibrasyon", async (HttpRequest req) =>
     byte[] bytes = await ReadFile(form);
     if (bytes == null) return Fail("Fotoğraf gelmedi.");
     double Num(string key) => double.TryParse(form[key].ToString().Replace(',', '.'), NumberStyles.Float, inv, out double v) && double.IsFinite(v) ? v : double.NaN;
-    // Yalniz dort mavi paspasla kalibrasyon (dama yok): tablanin dort kenari ayri ayri girilir
-    if (form.ContainsKey("alt")) return CalibrateWithMats(bytes, new TableSides { Bottom = Num("alt"), Top = Num("ust"), Left = Num("sol"), Right = Num("sag"), Diagonal = Num("kosegen") },
-        new MatSpec { LongMm = Num("paspasUzun"), ShortMm = Num("paspasKisa"), ThicknessMm = Num("paspasKalinlik") });
+    // L kose parcalariyla kalibrasyon: tablanin dort kenari ve kosegenler (L'lerin dis koseleri arasi) ayri ayri girilir
+    if (form.ContainsKey("alt")) return CalibrateWithLCorners(bytes, SidesFromForm(Num));
     double length = double.TryParse(form["uzunluk"], NumberStyles.Float, inv, out double l) && l > 0 ? l : 0;
     double width = double.TryParse(form["genislik"], NumberStyles.Float, inv, out double w) && w > 0 ? w : 0;
     if (!double.IsFinite(length) || !double.IsFinite(width) || length <= 0 || width <= 0)
@@ -377,44 +392,18 @@ app.MapPost("/api/kalibrasyon", async (HttpRequest req) =>
     {
         using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
         if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
-        // Kameranin lensi: kayitli; yoksa son kalibrasyon fotografi koseleri de gorunen (6 damali) bir fotografsa ondan
-        LensCalibration cameraLens = LoadCameraLens();
-        if ((cameraLens == null || cameraLens.ImageWidth != frame.Cols || cameraLens.ImageHeight != frame.Rows) && File.Exists(calibrationPhotoPath))
-        {
-            using Mat old = Cv2.ImRead(calibrationPhotoPath);
-            if (!old.Empty() && old.Cols == frame.Cols && old.Rows == frame.Rows)
-                foreach (CalibrationTag tag in tags)
-                {
-                    LensCalibration c0 = LensCalibrator.Calibrate(old, length, width, tag).Calibration;
-                    if (c0 != null && c0.CornerSource == LensCalibration.CornerSourcePaper && c0.MeetsReferenceTolerance)
-                    {
-                        Directory.CreateDirectory(lensDir);
-                        c0.Save(cameraLensPath);
-                        cameraLens = c0;
-                        break;
-                    }
-                }
-        }
         LensCalibrator.Result best = null;
         foreach (CalibrationTag tag in tags)
         {
-            LensCalibrator.Result r = LensCalibrator.Calibrate(frame, length, width, tag, measuredCenters, cameraLens);
+            LensCalibrator.Result r = LensCalibrator.Calibrate(frame, length, width, tag, measuredCenters);
             if (r.Calibration != null && r.Calibration.MeetsReferenceTolerance) { best = r; break; }
             if (best == null || (r.Calibration != null
                 ? best.Calibration == null || r.Calibration.MaxMm < best.Calibration.MaxMm
                 : best.Calibration == null && r.TagsFound > best.TagsFound))
                 best = r;
         }
-        if (best.Calibration == null && best.Error.StartsWith(LensCalibrator.NeedsLensError))
-            return Fail("Mavi paspaslar bulundu ama bu kameranın lens bilgisi yok. Köşe damaları paspasın altındayken balık gözü bükülmesi "
-                + "fotoğraftan çözülemiyor. Bir kez paspasları kaldırıp altı dama tam görünürken kalibre edin (lens kaydedilir), "
-                + "sonra paspasları geri koyup yeniden kalibre edin.");
         if (best.Calibration == null)
-            return Fail(best.Error.Replace(" yerde bulundu; dort kosede de tam gorunmeli.", " yerde bulundu; dört köşede de tam görünmeli.")
-                .Replace("Mavi paspaslar bulundu ama yalniz ", "Mavi paspaslar bulundu ama yalnız ").Replace(" dama gorunuyor; en az iki dama (uzun kenarlarin ortasindakiler) tam gorunmeli.", " dama görünüyor; en az iki dama (uzun kenarların ortasındakiler) tam görünmeli.")
-                .Replace("Mavi paspaslarin koseleri hesaplanamadi (kenarlari duz gorunmuyor).", "Mavi paspasların köşeleri hesaplanamadı (kenarları düz görünmüyor).")
-                .Replace("Mavi paspaslarin kenarlari yeterince gorunmuyor.", "Mavi paspasların kenarları yeterince görünmüyor.")
-                .Replace("Kameranin konumu cozulemedi (damalar).", "Kameranın konumu çözülemedi (damalar).").Replace("Kalibrasyon icin 6 etiket gerekli", "Kalibrasyon için 6 etiket gerekli").Replace(" bulundu. Dort koseye ve iki uzun kenarin ortasina birer etiket koyun; hepsi fotografta net gorunmeli.", " bulundu. Dört köşeye ve iki uzun kenarın ortasına birer etiket koyun; hepsi fotoğrafta net görünmeli.")
+            return Fail(best.Error.Replace("Kalibrasyon icin 6 etiket gerekli", "Kalibrasyon için 6 etiket gerekli").Replace(" bulundu. Dort koseye ve iki uzun kenarin ortasina birer etiket koyun; hepsi fotografta net gorunmeli.", " bulundu. Dört köşeye ve iki uzun kenarın ortasına birer etiket koyun; hepsi fotoğrafta net görünmeli.")
                 .Replace("Etiketler iki sira (ust ve alt uzun kenar) olarak gorunmuyor. Kamera tablayi uzun kenari yatay gorecek sekilde bakmali.", "Etiketler iki sıra (üst ve alt uzun kenar) olarak görünmüyor. Kamera tablayı uzun kenarı yatay görecek şekilde bakmalı."));
         if (!best.Calibration.MeetsReferenceTolerance)
         {
@@ -425,7 +414,7 @@ app.MapPost("/api/kalibrasyon", async (HttpRequest req) =>
         }
         Directory.CreateDirectory(lensDir);
         best.Calibration.Save(lensPath);
-        // Koseler de gorundu (6 dama): lens ve kamera konumu ileride mavi paspasli kalibrasyonda kullanilmak uzere saklanir
+        // Koseler de gorundu (6 dama): lens ve kamera konumu ileride L kose kalibrasyonunda kullanilmak uzere saklanir
         if (best.Calibration.CornerSource == LensCalibration.CornerSourcePaper && measuredCenters == null)
             best.Calibration.Save(cameraLensPath);
         File.WriteAllBytes(calibrationPhotoPath, bytes);
@@ -434,26 +423,8 @@ app.MapPost("/api/kalibrasyon", async (HttpRequest req) =>
         if (File.Exists(emptyPath)) File.Delete(emptyPath);
         LensCalibration saved = LoadLens();
         var uyarilar = new List<string>();
-        bool mats = saved.CornerSource == LensCalibration.CornerSourceMats;
-        if (mats && !best.PoseFromPrior)
-            uyarilar.Add($"Kamera, lensin kaydedildiği kalibrasyondan beri oynamış görünüyor (orta damalar {(double.IsNaN(best.PriorBoardRmsPx) ? "eşleşmedi" : best.PriorBoardRmsPx.ToString("F1") + " piksel kayık")}). "
-                + "Kameranın konumu yalnız iki orta damadan bulundu; uçlarda birkaç mm hata olabilir. En iyisi paspasları bir kez kaldırıp altı damayla kalibre edin, sonra paspaslarla yeniden kalibre edin.");
-        if (mats && double.IsFinite(saved.EdgeRmsMm) && saved.EdgeRmsMm > 2.5)
-            uyarilar.Add($"Mavi paspasların kenarları düz görünmüyor (sapma {saved.EdgeRmsMm:F1} mm). Paspaslar tablaya düz yatmalı, kenardan taşmamalı ve kıvrık olmamalı.");
         double cornerDev = saved.PaperCornerDeviationMm();
-        if (mats && (Math.Abs(saved.TableLengthMm - length) > 10 || Math.Abs(saved.TableWidthMm - width) > 10))
-            uyarilar.Add($"Paspas köşelerinden ölçülen tabla {saved.TableLengthMm:F0} × {saved.TableWidthMm:F0} mm, girilen {length:F0} × {width:F0} mm. "
-                + "Ölçülen kullanıldı (tabla köşeleri paspaslardır). Şeritle ölçtüğünüz paspas köşeleri arası belirgin farklıysa damaların baskı boyutunu (dört kare 100 mm) kontrol edin.");
-        if (mats && !double.IsNaN(cornerDev) && cornerDev > LensCalibration.MaxReferenceErrorMm)
-        {
-            Point2[] pc = saved.PaperCorners;
-            uyarilar.Add($"Mavi paspasların dış köşeleri tam dikdörtgen değil (en büyük fark {cornerDev:F1} mm): "
-                + $"alt {Point2.Distance(pc[2], pc[3]):F1}, üst {Point2.Distance(pc[0], pc[1]):F1}, sol {Point2.Distance(pc[2], pc[0]):F1}, sağ {Point2.Distance(pc[3], pc[1]):F1} mm, "
-                + $"sol üst köşe X {pc[0].X:F1}, sağ üst köşe X {pc[1].X:F1} mm. "
-                + "Sıfır noktası sol alt paspasın dış köşesi, X ekseni sağ alt paspasın dış köşesine doğru alındı; parça ölçüleri bundan etkilenmez. "
-                + "Tablanın kendisi tam dik açılı değilse bu normaldir; değilse paspasları tabla köşelerine tam oturtun.");
-        }
-        else if (!double.IsNaN(cornerDev) && cornerDev > LensCalibration.MaxReferenceErrorMm)
+        if (!double.IsNaN(cornerDev) && cornerDev > LensCalibration.MaxReferenceErrorMm)
         {
             Point2[] pc = saved.PaperCorners;
             uyarilar.Add($"Köşe kâğıtlarının dış köşeleri {length:F0} × {width:F0} mm dikdörtgen vermiyor (en büyük fark {cornerDev:F1} mm): "
@@ -477,16 +448,42 @@ void SaveCalibrationTopView(Mat frame, LensCalibration cal)
     catch (IOException) { }
 }
 
-// Paspasli kalibrasyon: dort mavi paspas tablanin koselerinde (dis kosesi tabla kosesi), tabla kenarlari seritle olculmus.
-// Lens kameranin kayitli lens bilgisinden (son 6 damali kalibrasyon) alinir; fotograftan kameranin konumu cozulur.
-IResult CalibrateWithMats(byte[] bytes, TableSides sides, MatSpec spec)
+// Formdan seritle olculen tabla: dort kenar ve sol alt -> sag ust kosegen (L parcalarinin dis koseleri arasi, mm)
+static TableSides SidesFromForm(Func<string, double> num) => new TableSides
 {
-    foreach (var (v, name) in new[] { (sides.Bottom, "alt"), (sides.Top, "üst"), (sides.Left, "sol"), (sides.Right, "sağ") })
-        if (double.IsNaN(v) || v < 500 || v > 10000) return Fail($"Tablanın {name} kenarını mm olarak girin (paspasların dış köşeleri arası).");
-    if (!double.IsNaN(sides.Diagonal) && sides.Diagonal <= 0) sides.Diagonal = double.NaN;
-    if (double.IsNaN(spec.LongMm) || spec.LongMm < 50 || double.IsNaN(spec.ShortMm) || spec.ShortMm < 30 || spec.ShortMm >= spec.LongMm)
-        return Fail("Paspasın uzun ve kısa kenarını mm olarak girin.");
-    if (double.IsNaN(spec.ThicknessMm) || spec.ThicknessMm < 0) spec.ThicknessMm = 0;
+    Bottom = num("alt"), Top = num("ust"), Left = num("sol"), Right = num("sag"), Diagonal = num("kosegen")
+};
+
+// Girilen kenarlarin kontrolu ve tabla koseleri (sol ust, sag ust, sol alt, sag alt); hatada null
+static Point2[] TapeCorners(TableSides s, out string error)
+{
+    foreach (var (v, name) in new[] { (s.Bottom, "alt"), (s.Top, "üst"), (s.Left, "sol"), (s.Right, "sağ") })
+        if (double.IsNaN(v) || v < 500 || v > 10000) { error = $"Tablanın {name} kenarını mm olarak girin (L parçalarının dış köşeleri arası)."; return null; }
+    if (!double.IsNaN(s.Diagonal) && s.Diagonal <= 0) s.Diagonal = double.NaN;
+    return s.Corners(out error);
+}
+
+// Kamera modelinin (lens + konum) fotografta L'lerden buldugu dort tabla kosesi (measured, modelin mm'si) seritle
+// olculen tabla koselerine (tape) oturtulur. Ayni kalibrasyonda serit olculeri degisince fotograf gerekmeden yeniden kurulur.
+static LensCalibration WithTape(LensCalibration cal, Point2[] measured, Point2[] tape)
+{
+    LensCalibration c = cal.WithoutCorrection();
+    Point2 center = LensCalibrator.ImageToTable(c, new[] { new Point2(c.Cx, c.Cy) })[0];
+    c.Correction = new TableCorrection(measured, tape, center, 0);
+    c.ResidualRadial = 0;
+    c.PaperCorners = (Point2[])tape.Clone();
+    c.TableLengthMm = Math.Round(Math.Max(tape[1].X, tape[3].X), 1);
+    c.TableWidthMm = Math.Round(Math.Max(tape[0].Y, tape[1].Y), 1);
+    return c;
+}
+
+// L kose kalibrasyonu: dort turkuaz L parcasi tablanin koselerinde (dis kosesi tabla kosesi), tabla kenarlari L'lerin
+// dis koseleri arasindan seritle olculmus. Lens ve kamera konumu kayitli kalibrasyondan (yoksa kamera-lens.txt);
+// fotograftan yalniz dort tabla kosesi bulunur ve seritle olculen tablaya oturtulur.
+IResult CalibrateWithLCorners(byte[] bytes, TableSides sides)
+{
+    Point2[] tape = TapeCorners(sides, out string tapeError);
+    if (tape == null) return Fail(tapeError);
     lock (gate)
     {
         using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
@@ -494,53 +491,84 @@ IResult CalibrateWithMats(byte[] bytes, TableSides sides, MatSpec spec)
         Directory.CreateDirectory(lensDir);
         // Son deneme her durumda saklanir (basarisiz kalibrasyonu sonradan incelemek icin)
         File.WriteAllBytes(Path.Combine(lensDir, "son-deneme.jpg"), bytes);
-        // Lens: kameranin kayitli lensi; konum tahmini (paspaslari fotografta aramak icin) son kalibrasyondan
         LensCalibration camLens = LoadCameraLens(), current = LoadLens();
         bool Fits(LensCalibration c) => c != null && c.ImageWidth == frame.Cols && c.ImageHeight == frame.Rows;
-        LensCalibration source = Fits(camLens) ? camLens : Fits(current) ? current : null;
+        LensCalibration source = Fits(current) ? current : Fits(camLens) ? camLens : null;
         if (source == null)
-            return Fail($"Bu kamera için {frame.Cols}x{frame.Rows} çözünürlükte kayıtlı lens bilgisi yok. Lens bükülmesi paspaslardan çözülemez; bir kez altı damalı kalibrasyon gerekir.");
-        var prior = new LensCalibration
-        {
-            ImageWidth = source.ImageWidth, ImageHeight = source.ImageHeight, Fx = source.Fx, Fy = source.Fy, Cx = source.Cx, Cy = source.Cy,
-            Distortion = (double[])source.Distortion.Clone(),
-            ResidualRadial = Fits(camLens) ? camLens.ResidualRadial : 0,   // lensin kalan bukulmesi: kameranin ozelligi
-            Rvec = (double[])(Fits(current) ? current : source).Rvec.Clone(), Tvec = (double[])(Fits(current) ? current : source).Tvec.Clone(),
-            // Kamera konumu bu kalibrasyondan alinir: dogrulugu da ondan
-            MeanMm = (Fits(current) ? current : source).MeanMm, MaxMm = (Fits(current) ? current : source).MaxMm, Points = (Fits(current) ? current : source).Points
-        };
-        MatCalibrator.Result r = MatCalibrator.Calibrate(frame, sides, spec, prior);
-        if (r.Calibration == null) return Fail(r.Error + " Fotoğraf incelenmek üzere kaydedildi (kalibrasyon\\son-deneme.jpg).");
-        LensCalibration cal = r.Calibration;
+            return Fail($"Bu kamera için {frame.Cols}x{frame.Rows} çözünürlükte kayıtlı lens ve kamera konumu yok. L parçaları tablanın köşelerini verir ama lens bükülmesini çözemez; bir kez altı damalı kalibrasyon gerekir.");
+        LensCalibration raw = source.WithoutCorrection();
+        // Koselerin modeldeki tahmini: onceki kalibrasyonda bulunan koseler, yoksa kagit koseleri, yoksa girilen tabla
+        Point2[] expected = source.Correction != null ? source.Correction.Measured.Take(4).ToArray()
+            : source.PaperCorners != null && source.PaperCorners.Length == 4 ? source.PaperCorners : tape;
+        LCornerFinder.Result found = LCornerFinder.Find(frame, raw, expected);
+        if (found.Corners == null) return Fail(found.Error + " Fotoğraf incelenmek üzere kaydedildi (kalibrasyon\\son-deneme.jpg).");
+        LensCalibration cal = WithTape(raw, found.Corners, tape);
+        cal.CornerSource = LensCalibration.CornerSourceL;
+        cal.TagType = "L";
+        cal.Created = DateTime.Now;
+        cal.EdgeRmsMm = double.NaN;
+        cal.BoardPlacements = null;
+        cal.MeasuredTagCenters = null;
         cal.Save(lensPath);
         File.WriteAllBytes(calibrationPhotoPath, bytes);
         SaveCalibrationTopView(frame, cal);
-        if (File.Exists(emptyPath)) File.Delete(emptyPath);   // kamera oynamis olabilir: bos tabla yeniden kaydedilmeli
-        LensCalibration saved = LoadLens();
-        var uyarilar = new List<string>();
-        string[] names = { "sol üst", "sağ üst", "sol alt", "sağ alt" };
-        if (r.UsedPriorPose)
+        // Inceleme: dort kosenin buyutulmus goruntusu, bulunan kenar noktalari, oturtulan kenar dogrulari ve kose
+        try
         {
-            Point2[] pc = r.PhotoCorners;
-            if (r.MatErrorMm.Max() > 10)
-                uyarilar.Add($"Paspas köşelerinden ölçülen tabla girilen kenarlardan farklı (köşe başına {string.Join(", ", r.MatErrorMm.Select((e, i) => $"{names[i]} {e:F0}"))} mm): "
-                    + $"fotoğrafa göre alt {Point2.Distance(pc[2], pc[3]):F0}, üst {Point2.Distance(pc[0], pc[1]):F0}, sol {Point2.Distance(pc[2], pc[0]):F0}, sağ {Point2.Distance(pc[3], pc[1]):F0} mm, "
-                    + $"köşegenler {Point2.Distance(pc[2], pc[1]):F0} / {Point2.Distance(pc[3], pc[0]):F0} mm. Tabla köşeleri paspaslardan alındı; parça ölçüleri bundan etkilenmez. "
-                    + "Fark büyükse paspasların köşeye tam oturduğunu kontrol edin ya da köşegeni ölçüp girin.");
+            using Mat view = LCornerFinder.DrawCorners(frame, raw, found);
+            File.WriteAllBytes(lCornerViewPath, view.ToBytes(".jpg", new ImageEncodingParam(ImwriteFlags.JpegQuality, 92)));
         }
-        else if (!saved.MeetsReferenceTolerance)
-            uyarilar.Add($"Paspas köşeleri modele {saved.MaxMm:F1} mm'ye kadar uymuyor (sınır {LensCalibration.MaxReferenceErrorMm:F0} mm; paspas başına "
-                + string.Join(", ", r.MatErrorMm.Select((e, i) => $"{names[i]} {e:F1}")) + " mm). Ölçüler önizleme sayılır. "
-                + "Hatası büyük paspasın tabla köşesine tam oturduğunu, paspas ölçüsünü ve tabla kenar uzunluklarını kontrol edin.");
-        if (double.IsFinite(saved.EdgeRmsMm) && saved.EdgeRmsMm > 2.5)
-            uyarilar.Add($"Mavi paspasların kenarları düz görünmüyor (sapma {saved.EdgeRmsMm:F1} mm). Paspaslar tablaya düz yatmalı ve kıvrık olmamalı.");
-        uyarilar.Add("Kalibrasyon kaydedildi. Şimdi boş tablayı (paspaslar yerinde, başka bir şey yokken) bir kez kaydedin.");
-        return Results.Json(new { kalibrasyon = LensStatus(saved), paspasHatasiMm = r.MatErrorMm.Select(e => Math.Round(e, 2)), uyarilar });
+        catch (IOException) { }
+        LensCalibration saved = LoadLens();
+        Point2[] q = found.Corners;
+        string[] names = LCornerFinder.CornerNames;
+        Console.WriteLine(string.Format(inv, "L koseleri bulundu (modelde alt/ust {0:F0}/{1:F0}, sol/sag {2:F0}/{3:F0} mm): {4}", Point2.Distance(q[2], q[3]), Point2.Distance(q[0], q[1]),
+            Point2.Distance(q[2], q[0]), Point2.Distance(q[3], q[1]),
+            string.Join("; ", found.Fits.Select((f, i) => string.Format(inv, "{0} uzun {1}/{2} {3:F2} mm, kisa {4}/{5} {6:F2} mm, aci {7:F2}", names[i], f.InliersX, f.SamplesX, f.RmsX, f.InliersY, f.SamplesY, f.RmsY, f.AngleDeg)))));
+        var uyarilar = new List<string>();
+        var weak =found.Fits.Select((f, i) => (f, i)).Where(x => x.f.RmsX > 2 || x.f.RmsY > 2 || x.f.InliersX < 0.7 * x.f.SamplesX || x.f.InliersY < 0.7 * x.f.SamplesY).ToList();
+        if (weak.Count > 0)
+            uyarilar.Add("Şu köşelerde L parçasının dış kenarı tam düz bulunamadı: " + string.Join("; ", weak.Select(x =>
+                $"{names[x.i]} (uzun kenar {x.f.InliersX}/{x.f.SamplesX} nokta, sapma {x.f.RmsX:F1} mm; kısa kenar {x.f.InliersY}/{x.f.SamplesY} nokta, sapma {x.f.RmsY:F1} mm)"))
+                + ". Parçanın köşeye tam oturduğunu ve dış kenarının önünde bir şey olmadığını kontrol edin.");
+        uyarilar.Add(File.Exists(emptyPath)
+            ? "Boş tabla fotoğrafı önceki kayıttan duruyor. Ölçüm sırasında tabla nasıl duracaksa (L parçaları kalacaksa onlarla) boş tablayı yeniden kaydedin."
+            : "Kalibrasyon kaydedildi. Şimdi boş tablayı kaydedin.");
+        return Results.Json(new
+        {
+            kalibrasyon = LensStatus(saved),
+            lKoseleri = found.Fits.Select((f, i) => new
+            {
+                kose = names[i], uzunNokta = f.InliersX, uzunProfil = f.SamplesX, uzunSapmaMm = Math.Round(f.RmsX, 2),
+                kisaNokta = f.InliersY, kisaProfil = f.SamplesY, kisaSapmaMm = Math.Round(f.RmsY, 2), aci = Math.Round(f.AngleDeg, 2)
+            }),
+            uyarilar
+        });
     }
 }
 
-// Bos tabla fotografi: kalibrasyondan sonra, damalar kaldirilinca ayni kameradan. Olcumde yalniz bos tabladan
-// farkli yerler parca sayilir (ahsaptaki lekeler, cita aralari, delikler karismaz).
+// Serit olculeri degisti: L'lerden bulunan koseler ayni kalir, yalniz yeni tabla olculerine yeniden oturtulur
+// (fotograf gerekmez). Arayuz ardindan son olcumu yeniden yapar.
+app.MapPost("/api/kalibrasyon/tabla", async (HttpRequest req) =>
+{
+    IFormCollection form = await req.ReadFormAsync();
+    double Num(string key) => double.TryParse(form[key].ToString().Replace(',', '.'), NumberStyles.Float, inv, out double v) && double.IsFinite(v) ? v : double.NaN;
+    TableSides sides = SidesFromForm(Num);
+    Point2[] tape = TapeCorners(sides, out string tapeError);
+    if (tape == null) return Fail(tapeError);
+    lock (gate)
+    {
+        LensCalibration c = LoadLens();
+        if (c == null || c.Correction == null || c.CornerSource != LensCalibration.CornerSourceL)
+            return Fail("Tabla ölçüleri L köşe kalibrasyonuna uygulanır; önce L parçaları yerindeyken kalibrasyon yapın.");
+        LensCalibration cal = WithTape(c, c.Correction.Measured.Take(4).ToArray(), tape);
+        cal.Save(lensPath);
+        return Results.Json(new { kalibrasyon = LensStatus(LoadLens()) });
+    }
+});
+
+// Bos tabla fotografi: L kose kalibrasyonundan sonra ayni kameradan, tabla olcumdeki haliyle bosken. Olcumde yalniz bos
+// tabladan farkli yerler parca sayilir (ahsaptaki lekeler, cita aralari, delikler karismaz).
 app.MapPost("/api/kalibrasyon/bos", async (HttpRequest req) =>
 {
     IFormCollection form = await req.ReadFormAsync();
@@ -554,58 +582,9 @@ app.MapPost("/api/kalibrasyon/bos", async (HttpRequest req) =>
         if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
         if (frame.Cols != c.ImageWidth || frame.Rows != c.ImageHeight)
             return Fail($"Bu fotoğraf {frame.Cols}x{frame.Rows} piksel, kalibrasyon {c.ImageWidth}x{c.ImageHeight}. Aynı kameranın aynı akışından çekin.");
-        // Damalar hala tabladaysa uyar: bos tabla olarak kaydedilirse olcumde etiket alanlari kor kalir
-        int tags = CheckerFinder.FindAll(frame, LensTag(c.TagType).Cols, LensTag(c.TagType).Rows).Count;
-        if (tags > 0) return Fail($"Fotoğrafta {tags} kalibrasyon daması görünüyor. Boş tabla fotoğrafından önce damaları kaldırın.");
-        // Seritle olculen tabla kenarlari formla gelir (arayuz her kayitta gonderir); gelmezse kalibrasyondaki kalir
-        double Num(string key) => double.TryParse(form[key].ToString().Replace(',', '.'), NumberStyles.Float, inv, out double v) && double.IsFinite(v) ? v : double.NaN;
-        Point2[] tape = c.PaperCorners;
-        if (form.ContainsKey("alt"))
-        {
-            var sides = new TableSides { Bottom = Num("alt"), Top = Num("ust"), Left = Num("sol"), Right = Num("sag"), Diagonal = Num("kosegen") };
-            foreach (var (v, name) in new[] { (sides.Bottom, "alt"), (sides.Top, "üst"), (sides.Left, "sol"), (sides.Right, "sağ") })
-                if (double.IsNaN(v) || v < 500 || v > 10000) return Fail($"Tablanın {name} kenarını mm olarak girin (şeritle, köşeden köşeye).");
-            if (!double.IsNaN(sides.Diagonal) && sides.Diagonal <= 0) sides.Diagonal = double.NaN;
-            tape = MatCalibrator.TableCorners(sides, out string tapeError);
-            if (tape == null) return Fail(tapeError);
-        }
-        if (tape == null || tape.Length != 4) return Fail("Tabla ölçüleri bilinmiyor: tablanın dört kenarını girip yeniden deneyin.");
+        Directory.CreateDirectory(lensDir);
         File.WriteAllBytes(emptyPath, bytes);
-        // Tabla kenarlari: bos tablada tablanin dort kenari bulunur (kenar boyunca 15-30 noktadan dogru, lensin gordugu
-        // sekliyle; alt ve ust kenar kose citalarinin ucundan gecer), koseleri seritle olculen tabla koselerine oturtulur.
-        // Boylece cizilen tabla cercevesi tablanin koselerinden gecer ve olculer girilen tabla olcusune gore yapilir.
-        // Paspas koselerinden daha kesin (paspas boylari 429-439 mm).
-        LensCalibration raw = c.WithoutCorrection();
-        Point2[] expected = c.PaperCorners != null && c.PaperCorners.Length == 4
-            ? (c.Correction == null ? c.PaperCorners : c.PaperCorners.Select(c.Correction.Invert).ToArray())
-            : tape;
-        TableEdgeFinder.Result edges = TableEdgeFinder.Find(frame, raw, expected);
-        if (edges.Corners == null)
-        {
-            Console.WriteLine("Tabla kenarlari bulunamadi, onceki tabla duzeltmesi kaldi: " + edges.Error);
-            return Results.Json(new
-            {
-                kalibrasyon = LensStatus(c),
-                tablaKenari = (object)null,
-                uyari = "Boş tabla kaydedildi ama tablanın kenarları fotoğrafta bulunamadı (" + edges.Error + "). Önceki tabla çerçevesi kullanılıyor; tablanın dört kenarı açıkça görünürken yeniden kaydedin."
-            });
-        }
-        Point2 center = LensCalibrator.ImageToTable(raw, new[] { new Point2(raw.Cx, raw.Cy) })[0];
-        raw.Correction = new TableCorrection(edges.Corners, tape, center, 0);
-        raw.ResidualRadial = 0;
-        raw.PaperCorners = (Point2[])tape.Clone();
-        raw.TableLengthMm = Math.Round(Math.Max(tape[1].X, tape[3].X), 1);
-        raw.TableWidthMm = Math.Round(Math.Max(tape[0].Y, tape[1].Y), 1);
-        raw.Save(lensPath);
-        Point2[] q = edges.Corners;
-        double alt = Point2.Distance(q[2], q[3]), ust = Point2.Distance(q[0], q[1]), sol = Point2.Distance(q[2], q[0]), sag = Point2.Distance(q[3], q[1]);
-        Console.WriteLine(string.Format(inv, "Tabla kenarlari bos tabladan bulundu: kamerada alt/ust {0:F0}/{1:F0}, sol/sag {2:F0}/{3:F0} mm; girilen tablaya oturtuldu.", alt, ust, sol, sag));
-        return Results.Json(new
-        {
-            kalibrasyon = LensStatus(LoadLens()),
-            tablaKenari = new { alt = Math.Round(alt), ust = Math.Round(ust), sol = Math.Round(sol), sag = Math.Round(sag) },
-            uyari = (string)null
-        });
+        return Results.Json(new { kalibrasyon = LensStatus(c) });
     }
 });
 
@@ -814,7 +793,8 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
         double formLength = lensCal.TableLengthMm, formWidth = lensCal.TableWidthMm;   // tabla olcusu kalibrasyondan
         // Damali kalibrasyonda dama yerleri olcumden cikarilir (damalar tablada unutulduysa parca sanilmasin)
         // Paspasli kalibrasyonda tablada dama yok: hicbir alan olcumden cikarilmaz
-        MarkerLayout layout = cornerMode || lensCal.TagType == "paspas" ? null : LensCalibrator.TagLayout(formLength, formWidth, LensTag(lensCal.TagType), TagCentersForMasking(lensCal));
+        // Dama etiketlerinin alani yalniz damali kalibrasyonda olcumden cikarilir (L / paspas kalibrasyonunda tablada etiket yok)
+        MarkerLayout layout = cornerMode || !CalibrationTag.All.Any(t => t.Name == lensCal.TagType) ? null : LensCalibrator.TagLayout(formLength, formWidth, LensTag(lensCal.TagType), TagCentersForMasking(lensCal));
         using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
         if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
 
