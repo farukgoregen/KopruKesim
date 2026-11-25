@@ -486,15 +486,27 @@ IResult CalibrateWithLCorners(byte[] bytes, TableSides sides)
     if (tape == null) return Fail(tapeError);
     lock (gate)
     {
-        using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
-        if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
+        using Mat decoded = Cv2.ImDecode(bytes, ImreadModes.Color);
+        if (decoded.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
         Directory.CreateDirectory(lensDir);
         // Son deneme her durumda saklanir (basarisiz kalibrasyonu sonradan incelemek icin)
         File.WriteAllBytes(Path.Combine(lensDir, "son-deneme.jpg"), bytes);
         LensCalibration camLens = LoadCameraLens(), current = LoadLens();
+        LensCalibration known = current ?? camLens;
+        // Kucultulmus fotograf (ayni en-boy orani, ornegin WhatsApp kopyasi 2000x1125): kamera cozunurlugune buyutulur.
+        // Lens modeli kameranin piksel olcegindedir; buyutme ayni goruntuyu verir ama kenarlar daha kaba bulunur (uyari).
+        int origW = decoded.Cols, origH = decoded.Rows;
+        bool scaled = known != null && origW < known.ImageWidth && origH < known.ImageHeight
+            && Math.Abs((double)origW / origH - (double)known.ImageWidth / known.ImageHeight) < 0.005;
+        using Mat frame = new Mat();
+        if (scaled)
+        {
+            Cv2.Resize(decoded, frame, new Size(known.ImageWidth, known.ImageHeight), 0, 0, InterpolationFlags.Cubic);
+            bytes = frame.ImEncode(".jpg", new ImageEncodingParam(ImwriteFlags.JpegQuality, 95));
+        }
+        else decoded.CopyTo(frame);
         bool Fits(LensCalibration c) => c != null && c.ImageWidth == frame.Cols && c.ImageHeight == frame.Rows;
         LensCalibration source = Fits(current) ? current : Fits(camLens) ? camLens : null;
-        LensCalibration known = current ?? camLens;
         if (source == null && known != null)
             return Fail($"Bu fotoğraf {frame.Cols}x{frame.Rows} piksel, kamera {known.ImageWidth}x{known.ImageHeight}. Kameranın kendi tam çözünürlüklü fotoğrafını kullanın "
                 + "(IP kameradan kalibre edin ya da kameradan alınan dosyayı yükleyin; WhatsApp gibi uygulamalar fotoğrafı küçültür).");
@@ -530,6 +542,9 @@ IResult CalibrateWithLCorners(byte[] bytes, TableSides sides)
             Point2.Distance(q[2], q[0]), Point2.Distance(q[3], q[1]),
             string.Join("; ", found.Fits.Select((f, i) => string.Format(inv, "{0} uzun {1}/{2} {3:F2} mm, kisa {4}/{5} {6:F2} mm, aci {7:F2}", names[i], f.InliersX, f.SamplesX, f.RmsX, f.InliersY, f.SamplesY, f.RmsY, f.AngleDeg)))));
         var uyarilar = new List<string>();
+        if (scaled)
+            uyarilar.Add($"Fotoğraf {origW}x{origH} pikseldi; kamera çözünürlüğüne ({frame.Cols}x{frame.Rows}) büyütülerek kalibre edildi. "
+                + $"Kenarlar kameranın kendi fotoğrafına göre {(double)frame.Cols / origW:F1} kat kaba bulunur; ilk fırsatta IP kameradan yeniden kalibre edin.");
         var weak =found.Fits.Select((f, i) => (f, i)).Where(x => x.f.RmsX > 2 || x.f.RmsY > 2 || x.f.InliersX < 0.7 * x.f.SamplesX || x.f.InliersY < 0.7 * x.f.SamplesY).ToList();
         if (weak.Count > 0)
             uyarilar.Add("Şu köşelerde L parçasının dış kenarı tam düz bulunamadı: " + string.Join("; ", weak.Select(x =>
