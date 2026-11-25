@@ -467,8 +467,8 @@ static Point2[] TapeCorners(TableSides s, out string error)
 
 // Kamera modelinin (lens + konum) fotografta L'lerden buldugu dort tabla kosesi (measured, modelin mm'si) gercek tabla
 // koselerine oturtulur. tape: seritle olculen L dis koseleri; tablanin koseleri bunlarin wallMm icinde (L duvari).
-// edgeCurve: kenar egrileri (TableEdgeCurve). Ayni kalibrasyonda serit olculeri degisince fotograf gerekmeden yeniden
-// kurulur (koseler ve kenar egrileri ayni kalir).
+// edgeCurve: kenar egrileri (artik null: kenarlar koseden koseye duz). Ayni kalibrasyonda serit olculeri degisince
+// fotograf gerekmeden yeniden kurulur (koseler ayni kalir).
 static LensCalibration WithTape(LensCalibration cal, Point2[] measured, Point2[] tape, double[] edgeCurve, double wallMm)
 {
     LensCalibration c = cal.WithoutCorrection();
@@ -524,13 +524,11 @@ IResult CalibrateWithLCorners(byte[] bytes, TableSides sides)
             : source.PaperCorners != null && source.PaperCorners.Length == 4 ? source.PaperCorners : tape;
         LCornerFinder.Result found = LCornerFinder.Find(frame, raw, expected);
         if (found.Corners == null) return Fail(found.Error + " Fotoğraf incelenmek üzere kaydedildi (kalibrasyon\\son-deneme.jpg).");
-        // Tabla koseleri L'nin dis kenarlarinin duvar kalinligi kadar icinde; kenarlar fotografta bulunan kenarlara
-        // (L kollari, sol/sag dis citanin uzun kenari) egriyle oturtulur
+        // Tabla koseleri L'nin dis kenarlarinin duvar kalinligi kadar icinde. Kenarlar koseden koseye duz tabla kenari
+        // (kullanici karari 2026-11-25: tahtalardaki cikintilara gore kenar egrisi oturtulmaz; TableEdgeCurve kullanilmiyor)
         double wall = LCornerFinder.WallMm;
         Point2[] inner = LCornerFinder.InsetCorners(found, wall);
-        Point2 axis = LensCalibrator.ImageToTable(raw, new[] { new Point2(raw.Cx, raw.Cy) })[0];
-        TableEdgeCurve.Result edges = TableEdgeCurve.Fit(frame, raw, found, inner, TableSides.Inset(tape, wall), axis, wall);
-        LensCalibration cal = WithTape(raw, inner, tape, edges.Curve, wall);
+        LensCalibration cal = WithTape(raw, inner, tape, null, wall);
         cal.CornerSource = LensCalibration.CornerSourceL;
         cal.TagType = "L";
         cal.Created = DateTime.Now;
@@ -553,14 +551,7 @@ IResult CalibrateWithLCorners(byte[] bytes, TableSides sides)
         Console.WriteLine(string.Format(inv, "L koseleri bulundu (modelde alt/ust {0:F0}/{1:F0}, sol/sag {2:F0}/{3:F0} mm): {4}", Point2.Distance(q[2], q[3]), Point2.Distance(q[0], q[1]),
             Point2.Distance(q[2], q[0]), Point2.Distance(q[3], q[1]),
             string.Join("; ", found.Fits.Select((f, i) => string.Format(inv, "{0} uzun {1}/{2} {3:F2} mm, kisa {4}/{5} {6:F2} mm, aci {7:F2}", names[i], f.InliersX, f.SamplesX, f.RmsX, f.InliersY, f.SamplesY, f.RmsY, f.AngleDeg)))));
-        Console.WriteLine("Tabla kenar egrileri: " + string.Join("; ", edges.Edges.Select(e => string.Format(inv,
-            "{0} L {1}/{2} cita {3}/{4} sapma {5:F2}->{6:F2} mm orta {7:F1} mm cita payi {8:F1} mm", e.Name, e.ArmUsed, e.ArmTotal, e.SlatUsed, e.SlatTotal, e.RmsBeforeMm, e.RmsAfterMm, e.MidShiftMm, e.SlatInsetMm))));
         var uyarilar = new List<string>();
-        var badEdges = edges.Edges.Where(e => e.ArmUsed == 0 || e.RmsAfterMm > 3).ToList();
-        if (badEdges.Count > 0)
-            uyarilar.Add("Şu kenarlarda tabla kenarı fotoğraftaki kenara tam oturtulamadı: " + string.Join("; ", badEdges.Select(e => e.ArmUsed == 0
-                ? $"{e.Name} (L kollarından yeterli nokta yok, kenar köşeden köşeye düz alındı)"
-                : $"{e.Name} (kalan sapma {e.RmsAfterMm:F1} mm)")) + ". \"L köşeleri (yakın)\" görüntüsüne bakın.");
         if (scaled)
             uyarilar.Add($"Fotoğraf {origW}x{origH} pikseldi; kamera çözünürlüğüne ({frame.Cols}x{frame.Rows}) büyütülerek kalibre edildi. "
                 + $"Kenarlar kameranın kendi fotoğrafına göre {(double)frame.Cols / origW:F1} kat kaba bulunur; ilk fırsatta IP kameradan yeniden kalibre edin.");
@@ -579,11 +570,6 @@ IResult CalibrateWithLCorners(byte[] bytes, TableSides sides)
             {
                 kose = names[i], uzunNokta = f.InliersX, uzunProfil = f.SamplesX, uzunSapmaMm = Math.Round(f.RmsX, 2),
                 kisaNokta = f.InliersY, kisaProfil = f.SamplesY, kisaSapmaMm = Math.Round(f.RmsY, 2), aci = Math.Round(f.AngleDeg, 2)
-            }),
-            kenarlar = edges.Edges.Select(e => new
-            {
-                kenar = e.Name, lNokta = e.ArmUsed, citaNokta = e.SlatUsed, onceSapmaMm = Math.Round(e.RmsBeforeMm, 2),
-                sonraSapmaMm = Math.Round(e.RmsAfterMm, 2), ortaKaymaMm = Math.Round(e.MidShiftMm, 1)
             }),
             uyarilar
         });
@@ -604,7 +590,7 @@ app.MapPost("/api/kalibrasyon/tabla", async (HttpRequest req) =>
         LensCalibration c = LoadLens();
         if (c == null || c.Correction == null || c.CornerSource != LensCalibration.CornerSourceL)
             return Fail("Tabla ölçüleri L köşe kalibrasyonuna uygulanır; önce L parçaları yerindeyken kalibrasyon yapın.");
-        LensCalibration cal = WithTape(c, c.Correction.Measured.Take(4).ToArray(), tape, c.Correction.EdgeCurve, c.LWallMm);
+        LensCalibration cal = WithTape(c, c.Correction.Measured.Take(4).ToArray(), tape, null, c.LWallMm);
         cal.Save(lensPath);
         return Results.Json(new { kalibrasyon = LensStatus(LoadLens()) });
     }
