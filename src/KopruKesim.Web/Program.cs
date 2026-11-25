@@ -198,12 +198,13 @@ static Point2[] TableBorder(double l, double w, int n)
         for (int i = 0; i < n; i++) pts.Add(c[e] + (c[(e + 1) % 4] - c[e]) * ((double)i / n));
     return pts.ToArray();
 }
-// Fotografta cizilecek tabla siniri: L kose kalibrasyonunda tablanin gercek koseleri (duzeltmenin oturttugu koseler;
-// tabla tam dik acili olmayabilir), degilse kalibrasyondaki olcunun dikdortgeni. Koseler arasi tabla mm'sinde duz,
-// fotografa duzeltmeyle (kenar egrileri dahil) gecirilir: cizgi bulunan kenarlarin ustunden gecer.
+// Fotografta cizilecek tabla siniri: L kose kalibrasyonunda kalibrasyon alani alt kenardan tanimlanir (kullanici karari
+// 2026-11-25): sol alt (0,0), alt kenar boyunca TableLengthMm, ayni tanim yukari (TableWidthMm). Tablanin gercek ust
+// koseleri bu alanin disina tasabilir (ust kenar 3309, alt 3304); o ince serit kalibrasyon disinda kalir. Duzeltme
+// (piksel -> mm) yine gercek koselere gore. Diger kalibrasyonlarda duzeltmenin oturttugu koseler.
 static Point2[] TableOutline(LensCalibration c, int n)
 {
-    if (c.Correction == null || c.Correction.True.Length < 4)
+    if (c.Correction == null || c.Correction.True.Length < 4 || c.CornerSource == LensCalibration.CornerSourceL)
         return TableBorder(c.TableLengthMm, c.TableWidthMm, n);
     Point2[] t = c.Correction.True;
     Point2[] k = { t[2], t[0], t[1], t[3] };   // sol alt, sol ust, sag ust, sag alt
@@ -478,8 +479,10 @@ static LensCalibration WithTape(LensCalibration cal, Point2[] measured, Point2[]
     c.ResidualRadial = 0;
     c.LWallMm = wallMm;
     c.PaperCorners = (Point2[])tape.Clone();
-    c.TableLengthMm = Math.Round(Math.Max(table[1].X, table[3].X), 1);
-    c.TableWidthMm = Math.Round(Math.Max(table[0].Y, table[1].Y), 1);
+    // Kalibrasyon alani alt kenardan: uzunluk alt kenar (sol alt -> sag alt), yukseklik yan kenarlarin alcak olani
+    // (alan tablanin ustunden tasmasin). Ust kenarin alttan uzun kismi alanin disinda kalir.
+    c.TableLengthMm = Math.Round(table[3].X, 1);
+    c.TableWidthMm = Math.Round(Math.Min(table[0].Y, table[1].Y), 1);
     return c;
 }
 

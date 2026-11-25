@@ -957,7 +957,7 @@
       topButton.setAttribute("aria-pressed", !corners && rectified);
       legend.textContent = corners
         ? "Dört köşe 3 kat büyütülmüş. Mor noktalar: L parçasının dış kenarında bulunan renk geçişleri. İnce sarı çizgiler: bu noktalara oturtulan L'nin dış kenarı (L'nin tam dış kenarında olmalı). Yeşil çizgiler: tabla kenarı, L duvarı kadar (5 mm) içeride. Kırmızı halka: tabla köşesi."
-        : "Sarı çizgi: tabla kenarı (köşeler L'lerin 5 mm içi; köşeden köşeye düz kenar, lens bükülmesi yüzünden kamera karesinde eğri görünür). Kırmızı halkalar: tabla köşeleri. (0,0): sol alt köşe.";
+        : "Sarı çizgi: tabla kenarı (kalibrasyon alanı: alt kenardan tanımlı, sol alt köşe L'nin 5 mm içi; üst köşelerden taşan ince şerit alanın dışında kalır. Lens bükülmesi yüzünden kamera karesinde eğri görünür). Kırmızı halkalar: tabla köşeleri. (0,0): sol alt köşe.";
       if (corners) {
         const img = document.createElement("img");
         img.src = result.lKoseler; img.alt = "L köşe parçaları, bulunan kenarlar"; img.style.width = "100%";
