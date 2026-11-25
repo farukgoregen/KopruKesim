@@ -104,6 +104,12 @@ Kullanıcı köşelere önce açık mavi kâğıt, sonra koyu mavi oluklu paspas
 - Şerit ölçüsü değişince fotoğrafsız yeniden oturtma (`/api/kalibrasyon/tabla`) ve son fotoğrafın yeniden ölçülmesi (kalınlık gibi). Deneme: alt 3304 → 3404 → 3304, sonuç geri birebir aynı.
 - Açık: sol üst / sağ üst L'nin dış yan kenarında koyu mavi ince şerit görünüyor (duvar mı gölge mi); çizgi turkuaz sınırında. Tam çözünürlüklü fotoğrafla bakılacak.
 
+## Tabla kenarı: 5 mm L duvarı ve kenar eğrisi (2026-11-25, dal eleven/2026-11-25-kenar-cerceve)
+- Sorun (kullanıcı): sarı çerçeve köşelerde doğru ama kenar boyunca tablanın dışında kalıyordu. İki neden: (1) L dış kenarı tabla kenarı sayılıyordu; kullanıcı: L duvarı 5 mm, tabla kenarı 5 mm içeride. (2) Dört köşe homografisi + tek radyal terim kenarların ortasındaki eğriliği karşılamıyordu (tek E, E + merkez denendi: L kol sapmaları değişmedi).
+- Çözüm: tabla köşesi = L dış kenar doğruları `LCornerFinder.WallMm` (5) kadar içeri kaydırılıp kesiştirilir (`InsetCorners`); şerit köşeleri de 5 mm içeri alınır (`TableSides.Inset`) → tabla 3294×1990 (eski L'siz şerit 3296/3300 × 1991/1988 ile tutarlı). `TableCorrection.EdgeCurve`: her kenara f(s) = s(1−s)(a+bs) sapma, Coons harmanlaması; köşelerde sıfır, ters dönüşüm sabit nokta yinelemesi. Sapma 5 mm ızgarada önbelleklenir (doğrudan hesaptan fark ~2e-4 mm; ızgarasız ölçüm 60–70 sn sürüyordu, şimdi 5–6 sn, eskiden 3 sn).
+- Kenar gözlemleri (`TableEdgeCurve`): L kollarının dış kenar noktaları (duvar düşülür) + sol/sağ dış çıtanın uzun kenarı (Lab ΔE > 25, 25 mm arayla; çıtanın içeride kalma payı ayrıca çözülür: sağ 0,6, sol 5,7 mm). Üst/alt kenarda çıta gözlemi yok. Kayıt `TablaKenarEgrisi=`, `LDuvarMm=`.
+- Sonuç (kalibrasyon fotoğrafı): sapma önce→sonra alt 1,67→0,91, sağ 2,46→1,88, üst 2,23→0,79, sol 3,90→2,43 mm; orta kayma üst −13,6 mm. 16 kontrol noktasında çizgi tahta kenarında; üst x≈900'de birkaç mm yukarıda, sol y≈1500'de ~1 px dışarıda.
+
 ## 2026-11-21 öncesi CLAUDE.md özeti (dama etiketli ve damasız modlar kaldırılmadan önce)
 Web arayüzünde yalnız Kalibrasyonlu ve Damasız kalibrasyon kaldı; Dama etiketli, Damasız (otomatik/elle/kayıtlı tabla), iki fotoğraflı ölçüm, Demo konsolu ve bunlara ait sınıflar (TableFinder, LineTableFinder, TableMatcher, DiagonalCorners, LensCorrection, HalfViewSolver, TableProfile, CheckerGridFit, MarkerSolver) silindi. Aşağısı o tarihteki CLAUDE.md metnidir (değiştirilmeden).
 

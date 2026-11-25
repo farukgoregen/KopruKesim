@@ -45,6 +45,9 @@ namespace KopruKesim.Vision
 
         public static readonly string[] CornerNames = { "sol üst", "sağ üst", "sol alt", "sağ alt" };
 
+        /// <summary>L parcasinin tabla kenarinin disina inen duvarinin kalinligi (mm; kullanici, 2026-11-25).</summary>
+        public const double WallMm = 5;
+
         /// <summary>Turkuaz puani (0..1): ton 80-94 tam, 76/98'de sifir (zemin ~100); doygunluk 60 -> 140; parlaklik 40 -> 70.</summary>
         public static Mat Score(Mat frame)
         {
@@ -170,13 +173,34 @@ namespace KopruKesim.Vision
         static double Lerp(double a, double b, double t) => a + (b - a) * t;
 
         /// <summary>
-        /// Inceleme goruntusu: her kosenin cevresi (tile x tile piksel) zoom kat buyutulur; profillerde bulunan kenar
-        /// noktalari (mor), oturtulan iki dis kenar dogrusu (sari, ince) ve kose (kirmizi halka) cizilir. Sira: ust satir
-        /// sol ust, sag ust; alt satir sol alt, sag alt.
+        /// Tabla koseleri (modelin mm'si): L'nin iki dis kenar dogrusu tablanin icine dogru wallMm kaydirilip kesistirilir.
+        /// L parcasinin dis duvari (5 mm) tablanin kenarindan disarida durur; dis kenar dogrusu tablanin kenari degildir.
         /// </summary>
-        public static Mat DrawCorners(Mat frame, LensCalibration lens, Result r, int tile = 260, int zoom = 3)
+        public static Point2[] InsetCorners(Result r, double wallMm)
+        {
+            var res = new Point2[4];
+            for (int c = 0; c < 4; c++)
+            {
+                CornerFit f = r.Fits[c];
+                bool right = c == 1 || c == 3, top = c == 0 || c == 1;
+                // Uzun kenar y = AX + BX x: ust kosede iceri -y, alt kosede +y; kisa kenar x = AY + BY y: solda +x, sagda -x
+                double ax = f.AX + (top ? -1 : 1) * wallMm * Math.Sqrt(1 + f.BX * f.BX);
+                double ay = f.AY + (right ? -1 : 1) * wallMm * Math.Sqrt(1 + f.BY * f.BY);
+                double xc = (ay + f.BY * ax) / (1 - f.BY * f.BX), yc = ax + f.BX * xc;
+                res[c] = new Point2(xc, yc);
+            }
+            return res;
+        }
+
+        /// <summary>
+        /// Inceleme goruntusu: her kosenin cevresi (tile x tile piksel) zoom kat buyutulur; profillerde bulunan kenar
+        /// noktalari (mor), oturtulan iki dis kenar dogrusu (sari, ince), duvar kalinligi kadar iceride tabla kenari (yesil)
+        /// ve tabla kosesi (kirmizi halka) cizilir. Sira: ust satir sol ust, sag ust; alt satir sol alt, sag alt.
+        /// </summary>
+        public static Mat DrawCorners(Mat frame, LensCalibration lens, Result r, double wallMm = 0, int tile = 260, int zoom = 3)
         {
             var tiles = new Mat[4];
+            Point2[] inner = InsetCorners(r, wallMm);
             try
             {
                 for (int i = 0; i < 4; i++)
@@ -188,9 +212,15 @@ namespace KopruKesim.Vision
                     // Dogrular koseden 30 mm disaridan kolun 300 mm icine kadar (tabla mm'sinde, fotografta egri olarak)
                     Point2[] lx = Enumerable.Range(-30, 331).Select(t => { double x = c.X + sx * t; return new Point2(x, f.AX + f.BX * x); }).ToArray();
                     Point2[] ly = Enumerable.Range(-30, 331).Select(t => { double y = c.Y + sy * t; return new Point2(f.AY + f.BY * y, y); }).ToArray();
+                    // Tabla kenari: dis kenar dogrulari duvar kalinligi kadar iceri (InsetCorners ile ayni kaydirma)
+                    double axIn = f.AX + (top ? -1 : 1) * wallMm * Math.Sqrt(1 + f.BX * f.BX), ayIn = f.AY + (right ? -1 : 1) * wallMm * Math.Sqrt(1 + f.BY * f.BY);
+                    Point2 ci = inner[i];
+                    Point2[] gx = Enumerable.Range(0, 301).Select(t => { double x = ci.X + sx * t; return new Point2(x, axIn + f.BX * x); }).ToArray();
+                    Point2[] gy = Enumerable.Range(0, 301).Select(t => { double y = ci.Y + sy * t; return new Point2(ayIn + f.BY * y, y); }).ToArray();
                     Point2[] px = LensCalibrator.TableToImage(lens, lx), py = LensCalibrator.TableToImage(lens, ly);
+                    Point2[] qx = LensCalibrator.TableToImage(lens, gx), qy = LensCalibrator.TableToImage(lens, gy);
                     Point2[] pts = LensCalibrator.TableToImage(lens, f.PointsX.Concat(f.PointsY).ToArray());
-                    Point2 cp = LensCalibrator.TableToImage(lens, new[] { c })[0];
+                    Point2 cp = LensCalibrator.TableToImage(lens, new[] { ci })[0];
                     int x0 = Math.Max(0, Math.Min(frame.Cols - tile, (int)cp.X - tile / 2)), y0 = Math.Max(0, Math.Min(frame.Rows - tile, (int)cp.Y - tile / 2));
                     var t2 = new Mat();
                     using (var crop = new Mat(frame, new Rect(x0, y0, tile, tile)))
@@ -199,6 +229,9 @@ namespace KopruKesim.Vision
                     foreach (Point2 p in pts) Cv2.Circle(t2, Z(p), 2, new Scalar(255, 0, 255), -1, LineTypes.AntiAlias);
                     foreach (Point2[] line in new[] { px, py })
                         for (int k = 1; k < line.Length; k++) Cv2.Line(t2, Z(line[k - 1]), Z(line[k]), new Scalar(0, 230, 255), 1, LineTypes.AntiAlias);
+                    if (wallMm > 0)
+                        foreach (Point2[] line in new[] { qx, qy })
+                            for (int k = 1; k < line.Length; k++) Cv2.Line(t2, Z(line[k - 1]), Z(line[k]), new Scalar(0, 220, 0), 2, LineTypes.AntiAlias);
                     Cv2.Circle(t2, Z(cp), 7, new Scalar(0, 0, 255), 2, LineTypes.AntiAlias);
                     Cv2.PutText(t2, CornerNames[i].Replace('ü', 'u').Replace('ğ', 'g'), new Point(10, 30), HersheyFonts.HersheySimplex, 0.9, Scalar.White, 3, LineTypes.AntiAlias);
                     Cv2.PutText(t2, CornerNames[i].Replace('ü', 'u').Replace('ğ', 'g'), new Point(10, 30), HersheyFonts.HersheySimplex, 0.9, Scalar.Black, 1, LineTypes.AntiAlias);

@@ -36,6 +36,37 @@ namespace KopruKesim.Vision
 
         static double Cross(Point2 a, Point2 b) => a.X * b.Y - a.Y * b.X;
 
+        /// <summary>
+        /// Dortgenin (sol ust, sag ust, sol alt, sag alt) her kenari d mm iceri kaydirilmis dortgeni: komsu kaydirilmis
+        /// kenarlarin kesisimleri. Sonuc yeniden cercevelenir: sol alt (0,0), sag alt +X ekseninde (rijit).
+        /// L kose parcasinin dis duvari tablanin kenarindan disarida: seritle L dis koseleri arasi olculen tablanin
+        /// gercek koseleri duvar kalinligi kadar iceridedir.
+        /// </summary>
+        public static Point2[] Inset(Point2[] c, double d)
+        {
+            Point2 tl = c[0], tr = c[1], bl = c[2], br = c[3];
+            Point2 mid = (tl + tr + bl + br) * 0.25;
+            // Kenarlar: alt (bl->br), sag (br->tr), ust (tl->tr), sol (bl->tl); her biri nokta + yon, iceri kaydirilmis
+            (Point2 p, Point2 u) Shift(Point2 a, Point2 b)
+            {
+                Point2 u = (b - a) * (1 / (b - a).Length), n = new Point2(-u.Y, u.X);
+                if (Point2.Dot(n, mid - a) < 0) n = n * -1;   // iceri
+                return (a + n * d, u);
+            }
+            var bottom = Shift(bl, br); var right = Shift(br, tr); var top = Shift(tl, tr); var left = Shift(bl, tl);
+            Point2 X((Point2 p, Point2 u) e, (Point2 p, Point2 u) f)
+            {
+                double den = Cross(e.u, f.u);
+                double t = Cross(f.p - e.p, f.u) / den;
+                return e.p + e.u * t;
+            }
+            Point2 ntl = X(top, left), ntr = X(top, right), nbl = X(bottom, left), nbr = X(bottom, right);
+            Point2 ax = nbr - nbl;
+            double phi = -Math.Atan2(ax.Y, ax.X), cs = Math.Cos(phi), sn = Math.Sin(phi);
+            Point2 R(Point2 p) { Point2 q = p - nbl; return new Point2(cs * q.X - sn * q.Y, sn * q.X + cs * q.Y); }
+            return new[] { R(ntl), R(ntr), R(nbl), R(nbr) };
+        }
+
         /// <summary>a merkezli ra ve b merkezli rb yaricapli cemberlerin kesisimlerinden kosulu saglayani.</summary>
         static bool Circles(Point2 a, double ra, Point2 b, double rb, Func<Point2, bool> pick, out Point2 p)
         {

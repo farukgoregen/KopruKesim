@@ -198,13 +198,15 @@ static Point2[] TableBorder(double l, double w, int n)
         for (int i = 0; i < n; i++) pts.Add(c[e] + (c[(e + 1) % 4] - c[e]) * ((double)i / n));
     return pts.ToArray();
 }
-// Fotografta cizilecek tabla siniri: L kose kalibrasyonunda seritle olculen dort koseden (tabla tam dik acili
-// olmayabilir), degilse kalibrasyondaki olcunun dikdortgeni
+// Fotografta cizilecek tabla siniri: L kose kalibrasyonunda tablanin gercek koseleri (duzeltmenin oturttugu koseler;
+// tabla tam dik acili olmayabilir), degilse kalibrasyondaki olcunun dikdortgeni. Koseler arasi tabla mm'sinde duz,
+// fotografa duzeltmeyle (kenar egrileri dahil) gecirilir: cizgi bulunan kenarlarin ustunden gecer.
 static Point2[] TableOutline(LensCalibration c, int n)
 {
-    if (c.Correction == null || c.PaperCorners == null || c.PaperCorners.Length != 4)
+    if (c.Correction == null || c.Correction.True.Length < 4)
         return TableBorder(c.TableLengthMm, c.TableWidthMm, n);
-    Point2[] k = { c.PaperCorners[2], c.PaperCorners[0], c.PaperCorners[1], c.PaperCorners[3] };   // sol alt, sol ust, sag ust, sag alt
+    Point2[] t = c.Correction.True;
+    Point2[] k = { t[2], t[0], t[1], t[3] };   // sol alt, sol ust, sag ust, sag alt
     var pts = new List<Point2>();
     for (int e = 0; e < 4; e++)
         for (int i = 0; i < n; i++) pts.Add(k[e] + (k[(e + 1) % 4] - k[e]) * ((double)i / n));
@@ -343,12 +345,12 @@ app.MapGet("/api/kalibrasyon/incele", () =>
             ustten = Jpeg(top),
             cerceve = LensCalibrator.TableToImage(cal, TableOutline(cal, 40)).Select(ValidPoint),
             sifir = ValidPoint(LensCalibrator.TableToImage(cal, new[] { new Point2(0, 0) })[0]),
-            // Tabla kosesi kabul edilen noktalar (seritle olculen tabla): fotografta ve tablada
-            kagitKoseleri = cal.PaperCorners == null ? null : new
+            // Tabla kosesi kabul edilen noktalar: fotografta ve tablada (L kose kalibrasyonunda tablanin gercek koseleri)
+            kagitKoseleri = (cal.Correction?.True.Take(4).ToArray() ?? cal.PaperCorners) is Point2[] corners ? new
             {
-                foto = LensCalibrator.TableToImage(cal, cal.PaperCorners).Select(ValidPoint),
-                tabla = cal.PaperCorners.Select(ValidPoint)
-            }
+                foto = LensCalibrator.TableToImage(cal, corners).Select(ValidPoint),
+                tabla = corners.Select(ValidPoint)
+            } : null
         });
     }
 });
@@ -463,17 +465,21 @@ static Point2[] TapeCorners(TableSides s, out string error)
     return s.Corners(out error);
 }
 
-// Kamera modelinin (lens + konum) fotografta L'lerden buldugu dort tabla kosesi (measured, modelin mm'si) seritle
-// olculen tabla koselerine (tape) oturtulur. Ayni kalibrasyonda serit olculeri degisince fotograf gerekmeden yeniden kurulur.
-static LensCalibration WithTape(LensCalibration cal, Point2[] measured, Point2[] tape)
+// Kamera modelinin (lens + konum) fotografta L'lerden buldugu dort tabla kosesi (measured, modelin mm'si) gercek tabla
+// koselerine oturtulur. tape: seritle olculen L dis koseleri; tablanin koseleri bunlarin wallMm icinde (L duvari).
+// edgeCurve: kenar egrileri (TableEdgeCurve). Ayni kalibrasyonda serit olculeri degisince fotograf gerekmeden yeniden
+// kurulur (koseler ve kenar egrileri ayni kalir).
+static LensCalibration WithTape(LensCalibration cal, Point2[] measured, Point2[] tape, double[] edgeCurve, double wallMm)
 {
     LensCalibration c = cal.WithoutCorrection();
     Point2 center = LensCalibrator.ImageToTable(c, new[] { new Point2(c.Cx, c.Cy) })[0];
-    c.Correction = new TableCorrection(measured, tape, center, 0);
+    Point2[] table = wallMm > 0 ? TableSides.Inset(tape, wallMm) : tape;
+    c.Correction = new TableCorrection(measured, table, center, 0, edgeCurve);
     c.ResidualRadial = 0;
+    c.LWallMm = wallMm;
     c.PaperCorners = (Point2[])tape.Clone();
-    c.TableLengthMm = Math.Round(Math.Max(tape[1].X, tape[3].X), 1);
-    c.TableWidthMm = Math.Round(Math.Max(tape[0].Y, tape[1].Y), 1);
+    c.TableLengthMm = Math.Round(Math.Max(table[1].X, table[3].X), 1);
+    c.TableWidthMm = Math.Round(Math.Max(table[0].Y, table[1].Y), 1);
     return c;
 }
 
@@ -518,7 +524,13 @@ IResult CalibrateWithLCorners(byte[] bytes, TableSides sides)
             : source.PaperCorners != null && source.PaperCorners.Length == 4 ? source.PaperCorners : tape;
         LCornerFinder.Result found = LCornerFinder.Find(frame, raw, expected);
         if (found.Corners == null) return Fail(found.Error + " Fotoğraf incelenmek üzere kaydedildi (kalibrasyon\\son-deneme.jpg).");
-        LensCalibration cal = WithTape(raw, found.Corners, tape);
+        // Tabla koseleri L'nin dis kenarlarinin duvar kalinligi kadar icinde; kenarlar fotografta bulunan kenarlara
+        // (L kollari, sol/sag dis citanin uzun kenari) egriyle oturtulur
+        double wall = LCornerFinder.WallMm;
+        Point2[] inner = LCornerFinder.InsetCorners(found, wall);
+        Point2 axis = LensCalibrator.ImageToTable(raw, new[] { new Point2(raw.Cx, raw.Cy) })[0];
+        TableEdgeCurve.Result edges = TableEdgeCurve.Fit(frame, raw, found, inner, TableSides.Inset(tape, wall), axis, wall);
+        LensCalibration cal = WithTape(raw, inner, tape, edges.Curve, wall);
         cal.CornerSource = LensCalibration.CornerSourceL;
         cal.TagType = "L";
         cal.Created = DateTime.Now;
@@ -531,7 +543,7 @@ IResult CalibrateWithLCorners(byte[] bytes, TableSides sides)
         // Inceleme: dort kosenin buyutulmus goruntusu, bulunan kenar noktalari, oturtulan kenar dogrulari ve kose
         try
         {
-            using Mat view = LCornerFinder.DrawCorners(frame, raw, found);
+            using Mat view = LCornerFinder.DrawCorners(frame, raw, found, wall);
             File.WriteAllBytes(lCornerViewPath, view.ToBytes(".jpg", new ImageEncodingParam(ImwriteFlags.JpegQuality, 92)));
         }
         catch (IOException) { }
@@ -541,7 +553,14 @@ IResult CalibrateWithLCorners(byte[] bytes, TableSides sides)
         Console.WriteLine(string.Format(inv, "L koseleri bulundu (modelde alt/ust {0:F0}/{1:F0}, sol/sag {2:F0}/{3:F0} mm): {4}", Point2.Distance(q[2], q[3]), Point2.Distance(q[0], q[1]),
             Point2.Distance(q[2], q[0]), Point2.Distance(q[3], q[1]),
             string.Join("; ", found.Fits.Select((f, i) => string.Format(inv, "{0} uzun {1}/{2} {3:F2} mm, kisa {4}/{5} {6:F2} mm, aci {7:F2}", names[i], f.InliersX, f.SamplesX, f.RmsX, f.InliersY, f.SamplesY, f.RmsY, f.AngleDeg)))));
+        Console.WriteLine("Tabla kenar egrileri: " + string.Join("; ", edges.Edges.Select(e => string.Format(inv,
+            "{0} L {1}/{2} cita {3}/{4} sapma {5:F2}->{6:F2} mm orta {7:F1} mm cita payi {8:F1} mm", e.Name, e.ArmUsed, e.ArmTotal, e.SlatUsed, e.SlatTotal, e.RmsBeforeMm, e.RmsAfterMm, e.MidShiftMm, e.SlatInsetMm))));
         var uyarilar = new List<string>();
+        var badEdges = edges.Edges.Where(e => e.ArmUsed == 0 || e.RmsAfterMm > 3).ToList();
+        if (badEdges.Count > 0)
+            uyarilar.Add("Şu kenarlarda tabla kenarı fotoğraftaki kenara tam oturtulamadı: " + string.Join("; ", badEdges.Select(e => e.ArmUsed == 0
+                ? $"{e.Name} (L kollarından yeterli nokta yok, kenar köşeden köşeye düz alındı)"
+                : $"{e.Name} (kalan sapma {e.RmsAfterMm:F1} mm)")) + ". \"L köşeleri (yakın)\" görüntüsüne bakın.");
         if (scaled)
             uyarilar.Add($"Fotoğraf {origW}x{origH} pikseldi; kamera çözünürlüğüne ({frame.Cols}x{frame.Rows}) büyütülerek kalibre edildi. "
                 + $"Kenarlar kameranın kendi fotoğrafına göre {(double)frame.Cols / origW:F1} kat kaba bulunur; ilk fırsatta IP kameradan yeniden kalibre edin.");
@@ -560,6 +579,11 @@ IResult CalibrateWithLCorners(byte[] bytes, TableSides sides)
             {
                 kose = names[i], uzunNokta = f.InliersX, uzunProfil = f.SamplesX, uzunSapmaMm = Math.Round(f.RmsX, 2),
                 kisaNokta = f.InliersY, kisaProfil = f.SamplesY, kisaSapmaMm = Math.Round(f.RmsY, 2), aci = Math.Round(f.AngleDeg, 2)
+            }),
+            kenarlar = edges.Edges.Select(e => new
+            {
+                kenar = e.Name, lNokta = e.ArmUsed, citaNokta = e.SlatUsed, onceSapmaMm = Math.Round(e.RmsBeforeMm, 2),
+                sonraSapmaMm = Math.Round(e.RmsAfterMm, 2), ortaKaymaMm = Math.Round(e.MidShiftMm, 1)
             }),
             uyarilar
         });
@@ -580,7 +604,7 @@ app.MapPost("/api/kalibrasyon/tabla", async (HttpRequest req) =>
         LensCalibration c = LoadLens();
         if (c == null || c.Correction == null || c.CornerSource != LensCalibration.CornerSourceL)
             return Fail("Tabla ölçüleri L köşe kalibrasyonuna uygulanır; önce L parçaları yerindeyken kalibrasyon yapın.");
-        LensCalibration cal = WithTape(c, c.Correction.Measured.Take(4).ToArray(), tape);
+        LensCalibration cal = WithTape(c, c.Correction.Measured.Take(4).ToArray(), tape, c.Correction.EdgeCurve, c.LWallMm);
         cal.Save(lensPath);
         return Results.Json(new { kalibrasyon = LensStatus(LoadLens()) });
     }
