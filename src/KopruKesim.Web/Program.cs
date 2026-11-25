@@ -494,6 +494,10 @@ IResult CalibrateWithLCorners(byte[] bytes, TableSides sides)
         LensCalibration camLens = LoadCameraLens(), current = LoadLens();
         bool Fits(LensCalibration c) => c != null && c.ImageWidth == frame.Cols && c.ImageHeight == frame.Rows;
         LensCalibration source = Fits(current) ? current : Fits(camLens) ? camLens : null;
+        LensCalibration known = current ?? camLens;
+        if (source == null && known != null)
+            return Fail($"Bu fotoğraf {frame.Cols}x{frame.Rows} piksel, kamera {known.ImageWidth}x{known.ImageHeight}. Kameranın kendi tam çözünürlüklü fotoğrafını kullanın "
+                + "(IP kameradan kalibre edin ya da kameradan alınan dosyayı yükleyin; WhatsApp gibi uygulamalar fotoğrafı küçültür).");
         if (source == null)
             return Fail($"Bu kamera için {frame.Cols}x{frame.Rows} çözünürlükte kayıtlı lens ve kamera konumu yok. L parçaları tablanın köşelerini verir ama lens bükülmesini çözemez; bir kez altı damalı kalibrasyon gerekir.");
         LensCalibration raw = source.WithoutCorrection();
@@ -588,12 +592,14 @@ app.MapPost("/api/kalibrasyon/bos", async (HttpRequest req) =>
     }
 });
 
+// Tabla kalibrasyonunu ve boş tablayı siler. Kameranin lensi (kamera-lens.txt) kalir: yeni L kose kalibrasyonu lens ve
+// kamera konumunu ondan alir.
 app.MapPost("/api/kalibrasyon/sil", () =>
 {
     lock (gate)
     {
-        if (File.Exists(emptyPath)) File.Delete(emptyPath);
-        if (File.Exists(lensPath)) File.Delete(lensPath);
+        foreach (string f in new[] { emptyPath, lensPath, calibrationPhotoPath, Path.Combine(lensDir, "ustten.jpg"), lCornerViewPath })
+            if (File.Exists(f)) File.Delete(f);
         lensCache = null;
         return Results.Json(LensStatus(null));
     }

@@ -286,7 +286,9 @@
         <div class="satir" style="margin-top: 8px">
           <button type="button" class="dugme ikincil" id="kalKamera" hidden>IP kameradan kalibre et</button>
           <button type="button" class="dugme ikincil" id="kalYukle">Kalibrasyon fotoğrafı yükle</button>
+          <button type="button" class="dugme ikincil" id="kalSil" hidden>Kalibrasyonu sil</button>
         </div>
+        <p class="ipucu-kucuk" id="kalSonuc" role="status"></p>
         <h3 style="margin: 14px 0 4px">2. Boş tabla</h3>
         <p class="ipucu-kucuk">Tabla ölçüm sırasındaki haliyle boşken kaydedin (L parçaları tablada kalacaksa onlarla). Ölçümde yalnız boş tabladan farklı yerler parça sayılır. Çıtalar kaydığında ya da ışık belirgin değiştiğinde yeniden kaydedin.</p>
         <div class="satir" style="margin-top: 8px">
@@ -1003,6 +1005,7 @@
     $("bosDurum").textContent = !available ? ""
       : k.bosTabla ? `Boş tabla kayıtlı (${k.bosTablaTarih}).` : "Boş tabla henüz kaydedilmedi: ölçmeden önce tabla boşken kaydedin.";
     const lKose = available && k.koseKaynagi === "L";
+    $("kalSil").hidden = !available;
     $("kalDurum").textContent = !available
       ? "Kamera kalibrasyonu yok. Aşağıdaki L köşe kalibrasyonu adımını yapın."
       : `${k.referansUygun === false ? "Kalibrasyon hatası yüksek; yeniden kalibre edin. " : ""}${lKose ? "L köşe kalibrasyonu" : "Kalibrasyon (eski yöntem; L köşe kalibrasyonunu yapın)"} ${k.tarih}: tabla ${sayi(k.tabla.uzunluk)} × ${sayi(k.tabla.genislik)} mm, kamera yüksekliği ${sayi(k.kamera.z)} mm.`;
@@ -1036,16 +1039,36 @@
     const f = new FormData();
     f.append("dosya", dosya);
     tablaOlculeri(f);
-    hata(""); $("kalDurum").textContent = "L köşeleri aranıyor…";
+    hata(""); $("kalSonuc").textContent = "L köşeleri aranıyor…";
     try {
       const r = await istek("/api/kalibrasyon", f);
       gorunum = "kalibrasyon";
       $("tuval").replaceChildren();
       kalDurumYaz(r.kalibrasyon);
       ciz();
-      if (r.uyarilar && r.uyarilar.length) hata(r.uyarilar.join(" "));
-    } catch (e) { hata(e.message); kalDurumAl(); }
+      $("kalSonuc").textContent = "Kalibrasyon kaydedildi. Kalibrasyon sekmesinde \"L köşeleri (yakın)\" görüntüsünde sarı çizgilerin L'lerin dış kenarında olduğunu kontrol edin."
+        + (r.uyarilar && r.uyarilar.length ? " " + r.uyarilar.join(" ") : "");
+    } catch (e) {
+      // Hata dugmenin yaninda da gosterilir (sonuc bolumu ekranda gorunmeyebilir)
+      $("kalSonuc").textContent = "Kalibrasyon yapılmadı: " + e.message;
+      hata(e.message); kalDurumAl();
+    }
   }
+  // Kalibrasyonu sil: yanlislikla basilmasin diye ikinci basista siler (4 sn icinde)
+  $("kalSil").onclick = async () => {
+    const b = $("kalSil");
+    if (!b.dataset.onay) {
+      b.dataset.onay = "1"; b.textContent = "Silmek için tekrar basın (boş tabla da silinir)";
+      clearTimeout(b.t); b.t = setTimeout(() => { delete b.dataset.onay; b.textContent = "Kalibrasyonu sil"; }, 4000);
+      return;
+    }
+    clearTimeout(b.t); delete b.dataset.onay; b.textContent = "Kalibrasyonu sil";
+    try {
+      kalDurumYaz(await istek("/api/kalibrasyon/sil", new FormData()));
+      $("kalSonuc").textContent = "Kalibrasyon ve boş tabla silindi. L parçaları köşedeyken yeniden kalibre edin.";
+      if (gorunum === "kalibrasyon") { $("tuval").replaceChildren(); ciz(); }
+    } catch (e) { $("kalSonuc").textContent = "Silinemedi: " + e.message; }
+  };
   async function kameraKaresi() {
     const r = await fetch("/api/kamera/kare");
     if (!r.ok) { let m = "Kameradan kare alınamadı."; try { m = (await r.json()).hata || m; } catch (e) { } throw new Error(m); }
