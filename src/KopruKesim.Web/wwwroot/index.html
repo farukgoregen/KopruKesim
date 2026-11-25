@@ -773,8 +773,9 @@
   $("sekmeKalCanli").onclick = () => { gorunum = "kalcanli"; ciz(); };
   $("sekmeOlcum").onclick = () => { if (sonOlcum) { gorunum = "olcum"; ciz(); } };
 
-  // Tabla olculeri ve kalinlik tarayicida hatirlanir
-  const AYAR = ["kalinlik", "kalAlt", "kalUst", "kalSol", "kalSag", "kalKosegen"];
+  // Yalniz kalinlik tarayicida hatirlanir. Tabla olculeri hatirlanmaz: kaynagi sunucudaki kalibrasyondur (yoksa sayfadaki
+  // varsayilan). Tarayicida kalan eski olculer (3296/3300/1991/1988) kalibrasyona gidiyordu (2026-11-25).
+  const AYAR = ["kalinlik"];
   const TABLA_ALAN = [["alt", "kalAlt"], ["ust", "kalUst"], ["sol", "kalSol"], ["sag", "kalSag"], ["kosegen", "kalKosegen"]];
 
   // ---------- IP kamera ----------
@@ -1009,11 +1010,9 @@
     $("kalDurum").textContent = !available
       ? "Kamera kalibrasyonu yok. Aşağıdaki L köşe kalibrasyonu adımını yapın."
       : `${k.referansUygun === false ? "Kalibrasyon hatası yüksek; yeniden kalibre edin. " : ""}${lKose ? "L köşe kalibrasyonu" : "Kalibrasyon (eski yöntem; L köşe kalibrasyonunu yapın)"} ${k.tarih}: tabla ${sayi(k.tabla.uzunluk)} × ${sayi(k.tabla.genislik)} mm, kamera yüksekliği ${sayi(k.kamera.z)} mm.`;
-    // Kalibrasyondaki serit olculeri alanlara yazilir (sunucudaki gecerli olcu; tarayicida kalan eski degerin yerine)
-    if (lKose && k.seritTabla) {
+    // Kalibrasyondaki serit olculeri alanlara yazilir (sunucudaki gecerli olcu)
+    if (lKose && k.seritTabla)
       for (const [ad, id] of TABLA_ALAN) if (document.activeElement !== $(id) && k.seritTabla[ad] != null) $(id).value = k.seritTabla[ad];
-      ayarKaydet();
-    }
   }
   async function kalDurumAl() {
     try { kalDurumYaz(await istek("/api/kalibrasyon")); } catch (e) { }
@@ -1046,7 +1045,10 @@
       $("tuval").replaceChildren();
       kalDurumYaz(r.kalibrasyon);
       ciz();
-      $("kalSonuc").textContent = "Kalibrasyon kaydedildi. Kalibrasyon sekmesinde \"L köşeleri (yakın)\" görüntüsünde sarı çizgilerin L'lerin dış kenarında olduğunu kontrol edin."
+      const st = r.kalibrasyon && r.kalibrasyon.seritTabla;
+      $("kalSonuc").textContent = "Kalibrasyon kaydedildi"
+        + (st ? ` (şerit ölçüleri: alt ${sayi(st.alt, 1)}, üst ${sayi(st.ust, 1)}, sol ${sayi(st.sol, 1)}, sağ ${sayi(st.sag, 1)}, köşegen ${sayi(st.kosegen, 1)} mm)` : "")
+        + ". Kalibrasyon sekmesinde \"L köşeleri (yakın)\" görüntüsünde sarı çizgilerin L'lerin dış kenarında olduğunu kontrol edin."
         + (r.uyarilar && r.uyarilar.length ? " " + r.uyarilar.join(" ") : "");
       // Kalibrasyon goruntusu sahnede: dar ekranda sayfanin basina (sahneye) donulur
       $("sahne").scrollIntoView({ behavior: "smooth", block: "start" });
