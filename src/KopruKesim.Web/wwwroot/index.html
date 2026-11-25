@@ -389,10 +389,10 @@
     if (!r.ok) throw new Error(veri.hata || "İstek başarısız oldu.");
     return veri;
   }
-  function hata(mesaj) {
+  function hata(mesaj, kaydir = true) {
     const h = $("hata"); h.textContent = mesaj || ""; h.hidden = !mesaj;
     // Sonuc bolumu ekranin disinda kalabiliyor (dugmeye basildi, hicbir sey olmadi sanilmasin)
-    if (mesaj) h.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    if (mesaj && kaydir) h.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
   function olcumFormu(dosya) {
@@ -1048,10 +1048,13 @@
       ciz();
       $("kalSonuc").textContent = "Kalibrasyon kaydedildi. Kalibrasyon sekmesinde \"L köşeleri (yakın)\" görüntüsünde sarı çizgilerin L'lerin dış kenarında olduğunu kontrol edin."
         + (r.uyarilar && r.uyarilar.length ? " " + r.uyarilar.join(" ") : "");
+      // Kalibrasyon goruntusu sahnede: dar ekranda sayfanin basina (sahneye) donulur
+      $("sahne").scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (e) {
       // Hata dugmenin yaninda da gosterilir (sonuc bolumu ekranda gorunmeyebilir)
+      // Hata dugmenin yaninda yazar; sayfa sonuc bolumune kaydirilmaz (dar ekranda IP kamera kismina iniyordu)
       $("kalSonuc").textContent = "Kalibrasyon yapılmadı: " + e.message;
-      hata(e.message); kalDurumAl();
+      hata(e.message, false); kalDurumAl();
     }
   }
   // Kalibrasyonu sil: yanlislikla basilmasin diye ikinci basista siler (4 sn icinde)
