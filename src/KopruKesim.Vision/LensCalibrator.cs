@@ -333,6 +333,7 @@ namespace KopruKesim.Vision
                 res[i] = new Point2(cx + s * dx, cy + s * dy);
                 // Seritle olculen tablaya gore kalan hata duzeltmesi (yukseklikten bagimsiz kabul: kalinlikla degisimi < 1 mm)
                 if (cal.Correction != null) res[i] = cal.Correction.Apply(res[i]);
+                if (cal.MetricCorrection != null) res[i] = cal.MetricCorrection.Apply(res[i]);
             }
             return res;
         }
@@ -385,7 +386,8 @@ namespace KopruKesim.Vision
                 TableCorrection corr = cal.Correction;
                 for (int i = 0; i < table.Length; i++)
                 {
-                    Point2 m = corr == null ? table[i] : corr.Invert(table[i]);
+                    Point2 tablePoint = cal.MetricCorrection == null ? table[i] : cal.MetricCorrection.Invert(table[i]);
+                    Point2 m = corr == null ? tablePoint : corr.Invert(tablePoint);
                     obj.Set(i, 0, new Vec3d(m.X, m.Y, z));
                 }
                 for (int i = 0; i < 3; i++) { rv.Set(i, 0, cal.Rvec[i]); tv.Set(i, 0, cal.Tvec[i]); }
