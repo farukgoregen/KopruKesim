@@ -106,6 +106,9 @@
   .duzelt-dugmeler { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
   .duzelt-dugmeler button.ikincil { border-style: dashed; }
   .duzelt-not { color: #b3261e; }
+  .kose-tutamac { fill: rgba(244, 194, 13, .25); stroke: var(--murekkep); stroke-width: 1.5px; vector-effect: non-scaling-stroke; cursor: grab; touch-action: none; outline: none; }
+  .kose-tutamac:hover, .kose-tutamac:focus-visible { fill: rgba(244, 194, 13, .55); }
+  .kose-tutamac.tutuldu { cursor: grabbing; fill: rgba(229, 51, 42, .35); stroke: #e5332a; }
   .kose-arti { stroke: var(--serit); stroke-linecap: round; filter: drop-shadow(0 0 1px #000); }
   .kose .kose-nokta { fill: #e5332a; stroke: #fff; }
   .kose.hesap .kose-nokta { fill: #fff; stroke: #e5332a; }
@@ -416,7 +419,7 @@
     $("sahne").classList.add("calisiyor");
     try {
       sonOlcum = await istek("/api/olc", f);
-      duzeltSecim = null; olcumVb = null;   // yeni olcum: kenar secimi ve yakinlik sifirlanir
+      duzeltSecim = null; olcumVb = null; koseOdak = null;   // yeni olcum: kenar secimi ve yakinlik sifirlanir
       sonFoto = dosya;
       if (gecis) gorunum = "olcum";
       ciz(); sonucYaz();
@@ -462,7 +465,7 @@
       $("ipucu").textContent = "Sarı çizgi kalibrasyona göre tablanın kenarıdır (lens bükülmesi yüzünden eğri). Tablanın kenarına oturmuyorsa kamera kalibrasyondan sonra oynamıştır; kalibrasyonu yenileyin.";
       return;
     }
-    if (gorunum === "olcum" && sonOlcum) { tuval.replaceChildren(olcumCiz()); $("ipucu").textContent = "Sarı kenara dokunun: uzunluğu görünür, kenarı içeri/dışarı kaydırabilirsiniz. Tekerlek ya da iki parmakla yakınlaştırın. Koordinatlar milimetredir."; return; }
+    if (gorunum === "olcum" && sonOlcum) { tuval.replaceChildren(olcumCiz()); $("ipucu").textContent = "Sarı kenara dokunun: uzunluğu görünür, kenarı içeri/dışarı kaydırabilirsiniz. Köşe noktalarını elle sürükleyebilir ya da seçip ok tuşlarıyla (0,5 mm; Shift ile 0,1 mm) taşıyabilirsiniz. Tekerlek ya da iki parmakla yakınlaştırın. Koordinatlar milimetredir."; return; }
     tuval.replaceChildren(bosDurum()); $("ipucu").textContent = "";
   }
 
@@ -585,6 +588,7 @@
   // Operator kenar duzeltmesi (2026-11-25): secili kenar paralel kaydirilir, iki ucundaki koseler komsu kenarlarla
   // kesisimden yeniden hesaplanir (yamuk ve cok koseli parcada da gecerli). Olculen degerler p.olculen'de saklanir.
   let duzeltSecim = null;          // { pi, i }: secili parca ve kenar
+  let koseOdak = null;             // ok tuslariyla tasinan kose ("pi-i"): yeniden cizimde odak geri verilir
   let olcumVb = null;              // ustten gorunumun yakinligi (yeniden cizimde korunur)
   let duzeltKayitZamanlayici = null;
   function kenarAlan(k) {
@@ -592,10 +596,27 @@
     for (let i = 0; i < k.length; i++) { const a = k[i], c = k[(i + 1) % k.length]; s += a[0] * c[1] - c[0] * a[1]; }
     return Math.abs(s) / 2;
   }
+  // Ilk duzeltmede olculen degerler saklanir (geri alma ve kayit icin)
+  function olculenSakla(p) {
+    if (!p.olculen) p.olculen = { koseler: p.koseler.map(v => [v[0], v[1]]), kenarlar: p.kenarlar.slice(), alanCm2: p.alanCm2 };
+    if (!p.duzeltme) p.duzeltme = new Array(p.koseler.length).fill(0);
+  }
+  function kenarlariYenile(p) {
+    const k = p.koseler, n = k.length;
+    p.kenarlar = k.map((v, j) => { const w = k[(j + 1) % n]; return Math.hypot(w[0] - v[0], w[1] - v[1]); });
+    p.alanCm2 = kenarAlan(k) / 100;
+  }
+  // Kose elle tasindi (surukleme ya da ok tuslari): yalniz o kose degisir, bagli iki kenar ondan cikar
+  function koseTasi(p, i, x, y) {
+    olculenSakla(p);
+    p.koseler[i] = [Math.round(x * 10) / 10, Math.round(y * 10) / 10];
+    if (!p.koseTasindi) p.koseTasindi = [];
+    if (!p.koseTasindi.includes(i + 1)) p.koseTasindi.push(i + 1);
+    kenarlariYenile(p);
+  }
   function kenarKaydir(p, i, d) {
     const k = p.koseler, n = k.length;
-    if (!p.olculen) p.olculen = { koseler: k.map(v => [v[0], v[1]]), kenarlar: p.kenarlar.slice(), alanCm2: p.alanCm2 };
-    if (!p.duzeltme) p.duzeltme = new Array(n).fill(0);
+    olculenSakla(p);
     const mx = k.reduce((s, v) => s + v[0], 0) / n, my = k.reduce((s, v) => s + v[1], 0) / n;
     const a = k[i], c = k[(i + 1) % n];
     const len = Math.hypot(c[0] - a[0], c[1] - a[1]) || 1;
@@ -623,7 +644,7 @@
     if (!p.olculen) return;
     p.koseler = p.olculen.koseler.map(v => [v[0], v[1]]);
     p.kenarlar = p.olculen.kenarlar.slice(); p.alanCm2 = p.olculen.alanCm2;
-    p.olculen = null; p.duzeltme = null;
+    p.olculen = null; p.duzeltme = null; p.koseTasindi = null;
     duzeltmeKaydet();
   }
   // Duzeltme olcum kaydina yazilir (olculen degerler silinmez); art arda dokunuslarda bir kez gonderilir
@@ -633,7 +654,7 @@
     if (!kayit) return;
     duzeltKayitZamanlayici = setTimeout(async () => {
       const parcalar = sonOlcum.parcalar.map((p, pi) => p.olculen ? { parca: pi + 1, koseler: p.koseler, kenarlar: p.kenarlar,
-        kaydirmaMm: p.duzeltme, olculenKoseler: p.olculen.koseler, olculenKenarlar: p.olculen.kenarlar } : null).filter(Boolean);
+        kaydirmaMm: p.duzeltme, elleTasinanKoseler: p.koseTasindi || [], olculenKoseler: p.olculen.koseler, olculenKenarlar: p.olculen.kenarlar } : null).filter(Boolean);
       try {
         const r = await fetch("/api/olc/duzelt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kayit, parcalar }) });
         if (!r.ok) throw new Error();
@@ -653,7 +674,8 @@
     // Goruntu 1 piksel = 1 mm, kapsadigi alan goruntuAlani (sol alt 0,0); eski yanitlarda tabla olcusune gerilir
     const GL = sonOlcum.goruntuAlani ? sonOlcum.goruntuAlani.uzunluk : L, GW = sonOlcum.goruntuAlani ? sonOlcum.goruntuAlani.genislik : W;
     svg.append(el("image", { href: sonOlcum.goruntu, x: 0, y: Y(GW), width: GL, height: GW, preserveAspectRatio: "none" }));
-    svg.append(el("rect", { x: 0, y: 0, width: L, height: W, fill: "none", stroke: "var(--murekkep)", "stroke-width": b * 0.15 }));
+    const tablaCerceve = el("rect", { x: 0, y: 0, width: L, height: W, fill: "none", stroke: "var(--murekkep)", "stroke-width": b * 0.15 });
+    svg.append(tablaCerceve);
 
     // Cetveller: 100 mm cizgi, 500 mm yazi
     const cetvel = el("g", { class: "cetvel" });
@@ -678,6 +700,8 @@
     sifir.append(st); svg.append(sifir);
 
     const edgeTargets = el("g");
+    const kosePlan = [];
+    const tutamaclar = el("g", { class: "tutamaclar" });
     const secimler = new Map();
     let suruklendi = false;
     const noktalar = el("g");
@@ -694,8 +718,12 @@
       const pts = k.map(v => `${v[0]},${Y(v[1])}`).join(" ");
       // Mermer gibi gorunmeyen nesne cizilmez (kullanici istegi 2026-11-25); yalniz sonuc listesinde yazilir
       if (!p.guvenilir) return;
-      svg.append(el("polygon", { class: "parca-golge", points: pts, "stroke-width": 2.5 }));
-      svg.append(el("polygon", { class: "parca-cizgi", points: pts, "stroke-width": 1.25 }));
+      const golge = el("polygon", { class: "parca-golge", points: pts, "stroke-width": 2.5 });
+      const cizgi = el("polygon", { class: "parca-cizgi", points: pts, "stroke-width": 1.25 });
+      svg.append(golge, cizgi);
+      // Surukleme sirasinda cizim canli guncellensin diye: parcanin cokgenleri ve kenar hedefleri
+      const parcaKenarlari = [];
+      kosePlan.push({ p, pi, golge, cizgi, parcaKenarlari });
       const mx = k.reduce((s, v) => s + v[0], 0) / n, my = k.reduce((s, v) => s + v[1], 0) / n;
       k.forEach((a, i) => {
         const c = k[(i + 1) % n], length = p.kenarlar[i];
@@ -745,6 +773,7 @@
           if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(); }
         });
         edgeTargets.append(edge);
+        parcaKenarlari.push(edge);
       });
       // Kose: tam yerinde kucuk bir nokta; numara parcanin disina dogru yana yazilir ki nokta ortulmesin
       const ortX = k.reduce((s, v) => s + v[0], 0) / n, ortY = k.reduce((s, v) => s + v[1], 0) / n;
@@ -756,7 +785,60 @@
         g.append(t); noktalar.append(g);
       });
     });
-    svg.append(noktalar, edgeTargets, allLabels, edgeLabel);
+    svg.append(noktalar, edgeTargets, allLabels, edgeLabel, tutamaclar);
+
+    // Kose tutamaclari: elle surukleyerek ya da secip ok tuslariyla (0,5 mm; Shift ile 0,1 mm) tasinir
+    const ekranMm = (cx, cy) => { const q = new DOMPoint(cx, cy).matrixTransform(svg.getScreenCTM().inverse()); return [q.x, W - q.y]; };
+    kosePlan.forEach(({ p, pi, golge, cizgi, parcaKenarlari }) => {
+      const n = p.koseler.length;
+      const canli = () => {
+        const s = p.koseler.map(v => `${v[0]},${Y(v[1])}`).join(" ");
+        golge.setAttribute("points", s); cizgi.setAttribute("points", s);
+        parcaKenarlari.forEach((ln, j) => {
+          const a = p.koseler[j], c = p.koseler[(j + 1) % n];
+          ln.setAttribute("x1", a[0]); ln.setAttribute("y1", Y(a[1])); ln.setAttribute("x2", c[0]); ln.setAttribute("y2", Y(c[1]));
+        });
+        edgeLabel.style.display = "none";
+      };
+      const bitir = () => { duzeltmeKaydet(); ciz(); sonucYaz(); };
+      p.koseler.forEach((v, i) => {
+        const h = el("circle", { class: "kose-tutamac", cx: v[0], cy: Y(v[1]), r: b * 0.5, role: "button", tabindex: 0,
+          "aria-label": `Parça ${pi + 1}, köşe ${i + 1}: sürükleyerek ya da ok tuşlarıyla taşıyın` });
+        let tut = null;
+        h.addEventListener("pointerdown", e => {
+          e.stopPropagation(); e.preventDefault();
+          try { h.setPointerCapture(e.pointerId); } catch { /* yakalama yoksa da hareket tutamac uzerinde izlenir */ }
+          const [mx, my] = ekranMm(e.clientX, e.clientY);
+          tut = { dx: p.koseler[i][0] - mx, dy: p.koseler[i][1] - my, oynadi: false };   // tutulan yer ile kose arasi korunur
+          h.classList.add("tutuldu");
+        });
+        h.addEventListener("pointermove", e => {
+          if (!tut) return;
+          const [mx, my] = ekranMm(e.clientX, e.clientY);
+          koseTasi(p, i, mx + tut.dx, my + tut.dy);
+          tut.oynadi = true;
+          h.setAttribute("cx", p.koseler[i][0]); h.setAttribute("cy", Y(p.koseler[i][1]));
+          canli();
+        });
+        const birak = () => { if (!tut) return; const oynadi = tut.oynadi; tut = null; h.classList.remove("tutuldu"); if (oynadi) bitir(); };
+        h.addEventListener("pointerup", birak);
+        h.addEventListener("pointercancel", birak);
+        h.addEventListener("keydown", e => {
+          const adim = e.shiftKey ? 0.1 : 0.5;
+          const d = { ArrowLeft: [-adim, 0], ArrowRight: [adim, 0], ArrowUp: [0, adim], ArrowDown: [0, -adim] }[e.key];
+          if (!d) return;
+          e.preventDefault();
+          koseTasi(p, i, p.koseler[i][0] + d[0], p.koseler[i][1] + d[1]);
+          koseOdak = `${pi}-${i}`;
+          bitir();
+          // Yeniden cizimde tutamac yenilendi: art arda basislar icin odak yeni tutamaca
+          document.querySelector(`#tuval .kose-tutamac[data-k="${pi}-${i}"]`)?.focus({ preventScroll: true });
+        });
+        h.addEventListener("focus", () => { koseOdak = `${pi}-${i}`; });
+        h.dataset.k = `${pi}-${i}`;
+        tutamaclar.append(h);
+      });
+    });
 
     // Yakinlik: etiketler ve kose isaretleri tum gorunum olceginde (mm); yakinda kenari ortmesinler diye gizlenir
     const kap = document.createElement("div"); kap.className = "yakinlik";
@@ -766,6 +848,13 @@
       svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
       const yakin = vb.w < tum.w * 0.35;
       noktalar.style.display = yakin ? "none" : "";
+      cetvel.style.display = yakin ? "none" : "";
+      sifir.style.display = yakin ? "none" : "";
+      // Tutamac ekranda yakinliktan bagimsiz ~12 piksel yaricapli (parmakla tutulabilir)
+      // Ekranda 1 pikselin mm karsiligi: tabla cercevesinin (L mm) ekrandaki genisliginden
+      const tw = tablaCerceve.getBoundingClientRect().width;
+      const mmPx = tw > 0 ? L / tw : vb.w / 800;
+      for (const h of tutamaclar.children) h.setAttribute("r", 12 * mmPx);
       allLabels.style.display = tumOlculer && !yakin ? "" : "none";
       edgeLabel.style.opacity = yakin ? "0" : "1";
       svg.style.touchAction = vb.w < tum.w * 0.999 ? "none" : "pan-y";
@@ -806,7 +895,9 @@
           dugme("Kenara yakınlaştır", "Seçili kenarın ortasına yakınlaştır", seciliKenaraGit));
         if (p.olculen) sag.append(dugme("Ölçüleni geri al", "Bu parçanın tüm düzeltmelerini geri al", () => { kenarSifirla(p); ciz(); sonucYaz(); }, "ikincil"));
       } else {
-        sol.textContent = "Düzeltmek için sarı kenara dokunun.";
+        sol.textContent = "Düzeltmek için sarı kenara dokunun ya da köşe noktasını sürükleyin.";
+        const duzeltilen = sonOlcum.parcalar.filter(q => q.olculen);
+        if (duzeltilen.length) sag.append(dugme("Ölçüleni geri al", "Tüm düzeltmeleri geri al", () => { duzeltilen.forEach(kenarSifirla); ciz(); sonucYaz(); }, "ikincil"));
       }
       sag.append(dugme("+", "Yakınlaştır", () => yakinlas(2, vb.x + vb.w / 2, vb.y + vb.h / 2)),
         dugme("−", "Uzaklaştır", () => yakinlas(0.5, vb.x + vb.w / 2, vb.y + vb.h / 2)),
@@ -849,6 +940,12 @@
     svg.addEventListener("pointercancel", birak);
     yerlestir();
     if (duzeltSecim) secimler.get(`${duzeltSecim.pi}-${duzeltSecim.i}`)?.();
+    if (koseOdak) requestAnimationFrame(() => tutamaclar.querySelector(`[data-k="${koseOdak}"]`)?.focus({ preventScroll: true }));
+    // Gercek ekran boyutu DOM'a eklenince ve sayfa duzeni degistikce belli olur (tutamac boyu)
+    if (window.ResizeObserver) new ResizeObserver(() => yerlestir()).observe(svg);
+    requestAnimationFrame(yerlestir);
+    setTimeout(yerlestir, 300);
+    svg.addEventListener("pointerenter", yerlestir);
     return kap;
   }
 
@@ -901,7 +998,9 @@
         <div class="boyut">${boyut}</div>
         <p class="ek">Alan ${sayi(p.alanCm2 / 10000, 2)} m², dönme ${sayi(p.donme, 1)}°, kalınlık ${sayi(sonOlcum.kalinlik)} mm</p>${
           p.not ? `<p class="ek"><strong>Uyarı:</strong> ${p.not}</p>` : ""}${
-          p.olculen ? `<p class="ek duzelt-not"><strong>Operatör düzeltti.</strong> Kenar kaydırmaları: ${p.duzeltme.map((d, j) => `${j + 1}–${(j + 1) % p.duzeltme.length + 1}: ${d > 0 ? "+" : ""}${sayi(d, 1)}`).join(", ")} mm.` +
+          p.olculen ? `<p class="ek duzelt-not"><strong>Operatör düzeltti.</strong>` +
+            (p.duzeltme && p.duzeltme.some(d => d) ? ` Kenar kaydırmaları: ${p.duzeltme.map((d, j) => `${j + 1}–${(j + 1) % p.duzeltme.length + 1}: ${d > 0 ? "+" : ""}${sayi(d, 1)}`).join(", ")} mm.` : "") +
+            (p.koseTasindi && p.koseTasindi.length ? ` Elle taşınan köşe: ${p.koseTasindi.join(", ")}.` : "") +
             (p.olculen.kenarlar.length === 4 ? ` Ölçülen: ${sayi((p.olculen.kenarlar[0] + p.olculen.kenarlar[2]) / 2)} × ${sayi((p.olculen.kenarlar[1] + p.olculen.kenarlar[3]) / 2)} mm.` : "") + `</p>` : ""}
         <table><thead><tr><th>Köşe</th><th>X (mm)</th><th>Y (mm)</th></tr></thead><tbody>${
           p.koseler.map((v, i) => `<tr data-n="n-${pi}-${i}"><td>${i + 1}</td><td>${sayi(v[0], 1)}</td><td>${sayi(v[1], 1)}</td></tr>`).join("")
