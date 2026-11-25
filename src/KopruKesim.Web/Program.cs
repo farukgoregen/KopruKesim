@@ -817,6 +817,33 @@ app.MapPost("/api/kalibrasyon-damasiz/sil", () =>
 // Olcum: kayitli kalibrasyonla (lens + tabla, bir kez yapilir) duzeltilmis fotografta parcalarin koseleri (mm) ve ustten
 // gorunum. "kalibrasyon": "1" damali kalibrasyon (veri/kalibrasyon), "2" damasiz kalibrasyon (veri/kalibrasyon-damasiz).
 // Tabla olcusu kalibrasyondan gelir; her yontem kendi bos tabla fotografini kullanir.
+// Operator kenar duzeltmesi (2026-11-25): arayuzde kenari kaydirilan parcalarin yeni koseleri olcum kaydina
+// "operatorDuzeltmesi" olarak yazilir; olculen koseler kayitta aynen kalir. Bos liste duzeltmeyi kaldirir.
+app.MapPost("/api/olc/duzelt", async (HttpRequest req) =>
+{
+    System.Text.Json.Nodes.JsonNode body;
+    try { body = await System.Text.Json.Nodes.JsonNode.ParseAsync(req.Body); }
+    catch (System.Text.Json.JsonException) { return Fail("Düzeltme okunamadı."); }
+    string id = body?["kayit"]?.GetValue<string>();
+    if (id == null || !System.Text.RegularExpressions.Regex.IsMatch(id, @"\A[0-9]{8}_[0-9]{6}_[0-9]{3}\z")) return Results.NotFound();
+    string path = Path.Combine(dataDir, "olcumler", id + ".json");
+    lock (gate)
+    {
+        if (!File.Exists(path)) return Results.NotFound();
+        var record = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path)) as System.Text.Json.Nodes.JsonObject;
+        if (record == null) return Fail("Ölçüm kaydı okunamadı.");
+        var parts = body["parcalar"] as System.Text.Json.Nodes.JsonArray;
+        if (parts == null || parts.Count == 0) record.Remove("operatorDuzeltmesi");
+        else record["operatorDuzeltmesi"] = new System.Text.Json.Nodes.JsonObject
+        {
+            ["zaman"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+            ["parcalar"] = parts.DeepClone()
+        };
+        File.WriteAllText(path, record.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+    }
+    return Results.Ok();
+});
+
 app.MapPost("/api/olc", async (HttpRequest req) =>
 {
     IFormCollection form = await req.ReadFormAsync();
