@@ -198,15 +198,13 @@ static Point2[] TableBorder(double l, double w, int n)
         for (int i = 0; i < n; i++) pts.Add(c[e] + (c[(e + 1) % 4] - c[e]) * ((double)i / n));
     return pts.ToArray();
 }
-// Fotografta cizilecek tabla siniri: L kose kalibrasyonunda kalibrasyon alani alt kenardan tanimlanir (kullanici karari
-// 2026-11-25): sol alt (0,0), alt kenar boyunca TableLengthMm, ayni tanim yukari (TableWidthMm). Tablanin gercek ust
-// koseleri bu alanin disina tasabilir (ust kenar 3309, alt 3304); o ince serit kalibrasyon disinda kalir. Duzeltme
-// (piksel -> mm) yine gercek koselere gore. Diger kalibrasyonlarda duzeltmenin oturttugu koseler.
+// Fotografta cizilecek tabla siniri: L kose kalibrasyonunda kalibrasyon alani (alt ve sol kenardan, CalibrationArea),
+// digerlerinde duzeltmenin oturttugu koseler.
 static Point2[] TableOutline(LensCalibration c, int n)
 {
-    if (c.Correction == null || c.Correction.True.Length < 4 || c.CornerSource == LensCalibration.CornerSourceL)
+    if (c.Correction == null || c.Correction.True.Length < 4)
         return TableBorder(c.TableLengthMm, c.TableWidthMm, n);
-    Point2[] t = c.Correction.True;
+    Point2[] t = c.CornerSource == LensCalibration.CornerSourceL ? CalibrationArea(c.Correction.True) : c.Correction.True;
     Point2[] k = { t[2], t[0], t[1], t[3] };   // sol alt, sol ust, sag ust, sag alt
     var pts = new List<Point2>();
     for (int e = 0; e < 4; e++)
@@ -474,16 +472,27 @@ static LensCalibration WithTape(LensCalibration cal, Point2[] measured, Point2[]
 {
     LensCalibration c = cal.WithoutCorrection();
     Point2 center = LensCalibrator.ImageToTable(c, new[] { new Point2(c.Cx, c.Cy) })[0];
+    // Piksel -> mm: dort gercek kose (perspektifi ancak dort kose duzeltir; uc koseyle +-50 mm bozuluyordu)
     Point2[] table = wallMm > 0 ? TableSides.Inset(tape, wallMm) : tape;
     c.Correction = new TableCorrection(measured, table, center, 0, edgeCurve);
     c.ResidualRadial = 0;
     c.LWallMm = wallMm;
     c.PaperCorners = (Point2[])tape.Clone();
-    // Kalibrasyon alani alt kenardan: uzunluk alt kenar (sol alt -> sag alt), yukseklik yan kenarlarin alcak olani
-    // (alan tablanin ustunden tasmasin). Ust kenarin alttan uzun kismi alanin disinda kalir.
-    c.TableLengthMm = Math.Round(table[3].X, 1);
-    c.TableWidthMm = Math.Round(Math.Min(table[0].Y, table[1].Y), 1);
+    // Kalibrasyon alani (kullanici karari, Oneri 2): alt kenar ve sol kenardan; bkz. CalibrationArea
+    Point2[] area = CalibrationArea(table);
+    c.TableLengthMm = Math.Round(area[3].X, 1);
+    c.TableWidthMm = Math.Round(area[0].Y, 1);
     return c;
+}
+
+// Kalibrasyon alani (kullanici karari "Oneri 2", 2026-11-25): alt kenar (sol alt -> sag alt) aynen yukari, sol kenar
+// (sol alt -> sol ust) aynen saga tasinir; sag ust kose = sag alt + sol kenar. Tablanin gercek sag ust kosesi
+// kullanilmaz: ust ve sag kenara yakin ince serit kalibrasyon alaninin disinda kalabilir. Sira: sol ust, sag ust,
+// sol alt, sag alt.
+static Point2[] CalibrationArea(Point2[] table)
+{
+    Point2 tl = table[0], bl = table[2], br = table[3];
+    return new[] { tl, br + (tl - bl), bl, br };
 }
 
 // L kose kalibrasyonu: dort turkuaz L parcasi tablanin koselerinde (dis kosesi tabla kosesi), tabla kenarlari L'lerin
