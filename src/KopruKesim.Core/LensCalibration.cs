@@ -51,6 +51,7 @@ namespace KopruKesim.Core
         /// LensCalibrator.ImageToTable / TableToImage bunu kendisi uygular: disaridan bakinca tabla mm'si gercek tabladir.
         /// </summary>
         public TableCorrection Correction;
+        public TableMetricCorrection MetricCorrection;
         /// <summary>
         /// Lensin bukulme modelinden kalan radyal hata (1/mm^2, tabla duzleminde, optik eksenin tablayi kestigi nokta
         /// etrafinda): kameranin sabit ozelligi, kamera-lens.txt'de saklanir ve her paspasli kalibrasyonda tabla
@@ -70,6 +71,7 @@ namespace KopruKesim.Core
         {
             var c = (LensCalibration)MemberwiseClone();
             c.Correction = null;
+            c.MetricCorrection = null;
             return c;
         }
 
@@ -82,6 +84,7 @@ namespace KopruKesim.Core
         {
             var c = (LensCalibration)MemberwiseClone();
             if (marginMm == 0) return c;
+            c.MetricCorrection = MetricCorrection?.WithMargin(marginMm);
             var shift = new Point2(marginMm, marginMm);
             c.TableLengthMm = TableLengthMm + 2 * marginMm;
             c.TableWidthMm = TableWidthMm + 2 * marginMm;
@@ -160,6 +163,8 @@ namespace KopruKesim.Core
                 lines.Add("TablaDuzeltme=" + arr(Correction.ToValues()));
             if (Correction?.EdgeCurve != null)
                 lines.Add("TablaKenarEgrisi=" + arr(Correction.EdgeCurve));
+            if (MetricCorrection != null)
+                lines.Add("TablaAlanDuzeltme=" + arr(MetricCorrection.ToValues()));
             System.IO.File.WriteAllLines(path, lines);
         }
 
@@ -168,7 +173,7 @@ namespace KopruKesim.Core
             var c = CultureInfo.InvariantCulture;
             var cal = new LensCalibration();
             Func<string, double[]> arr = s => s.Split(',').Select(v => double.Parse(v, c)).ToArray();
-            double[] edgeCurve = null;
+            double[] edgeCurve = null, metric = null;
             foreach (string raw in System.IO.File.ReadAllLines(path))
             {
                 string line = raw.Trim();
@@ -224,6 +229,7 @@ namespace KopruKesim.Core
                     case "LDuvarMm": cal.LWallMm = double.Parse(val, c); break;
                     case "TablaDuzeltme": cal.Correction = TableCorrection.FromValues(arr(val)); break;
                     case "TablaKenarEgrisi": edgeCurve = arr(val); break;
+                    case "TablaAlanDuzeltme": metric = arr(val); break;
                     case "Nokta": cal.Points = int.Parse(val, c); break;
                     case "Etiket": cal.TagType = val; break;
                     default: break;   // ileride eklenecek alanlar eski surumu bozmasin
@@ -237,6 +243,8 @@ namespace KopruKesim.Core
                 TableCorrection k = cal.Correction;
                 cal.Correction = new TableCorrection(k.Measured, k.True, k.Center, k.E, edgeCurve);
             }
+            if (metric != null)
+                cal.MetricCorrection = new TableMetricCorrection(metric, cal.TableLengthMm, cal.TableWidthMm);
             return cal;
         }
     }
