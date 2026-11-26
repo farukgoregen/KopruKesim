@@ -32,7 +32,7 @@ namespace KopruKesim.Vision
             /// <summary>Oturtulan dogrular: uzun kenar y = AX + BX x, kisa kenar x = AY + BY y (modelin mm'si).</summary>
             public double AX, BX, AY, BY;
             /// <summary>Profillerde bulunan dis kenar noktalari (inceleme icin).</summary>
-            public List<Point2> PointsX, PointsY;
+            public List<Point2> PointsX, PointsY, TipX, TipY;
         }
 
         public sealed class Result
@@ -73,7 +73,7 @@ namespace KopruKesim.Vision
         /// <param name="lens">Duzeltmesiz kamera modeli (WithoutCorrection).</param>
         /// <param name="expected">Koselerin modeldeki tahmini (sol ust, sag ust, sol alt, sag alt).</param>
         /// <param name="searchMm">Tahmini koseden en fazla bu kadar uzakta aranir.</param>
-        public static Result Find(Mat frame, LensCalibration lens, Point2[] expected, double searchMm = 300)
+        public static Result Find(Mat frame, LensCalibration lens, Point2[] expected, double searchMm = 300, bool measureTips = false)
         {
             var res = new Result();
             using (Mat score = Score(frame))
@@ -94,7 +94,7 @@ namespace KopruKesim.Vision
                 Point2[] expImg = LensCalibrator.TableToImage(lens, expected);
                 for (int c = 0; c < 4; c++)
                 {
-                    CornerFit fit = FitCorner(c, lens, expected[c], expImg[c], searchMm, n, stats, lab, sc, w, h, out string err);
+                    CornerFit fit = FitCorner(c, lens, expected[c], expImg[c], searchMm, n, stats, lab, sc, w, h, measureTips, out string err);
                     if (fit == null) { res.Error = "Tablanın " + CornerNames[c] + " köşesindeki L parçası: " + err; return res; }
                     res.Fits[c] = fit;
                 }
@@ -104,7 +104,7 @@ namespace KopruKesim.Vision
         }
 
         static CornerFit FitCorner(int c, LensCalibration lens, Point2 exp, Point2 expImg, double searchMm, int n, Mat stats, int[] lab, float[] sc,
-            int w, int h, out string err)
+            int w, int h, bool measureTips, out string err)
         {
             err = null;
             // Dis taraflar: sol koselerde X kucuk, sag koselerde X buyuk; ust koselerde Y buyuk, alt koselerde Y kucuk
@@ -163,10 +163,18 @@ namespace KopruKesim.Vision
             // Uzun kenar yonu (1, bx), kisa kenar yonu (by, 1)
             double cosA = (bys + bxs) / (Math.Sqrt(1 + bxs * bxs) * Math.Sqrt(1 + bys * bys));
             double angle = Math.Acos(Math.Max(-1, Math.Min(1, cosA))) * 180 / Math.PI;
+            List<Point2> tipX = null, tipY = null;
+            if (measureTips)
+            {
+                int inwardX = right ? -1 : 1, inwardY = top ? -1 : 1;
+                double y = ax + bxs * farX, x = ay + bys * farY;
+                tipX = EdgePoints(lens, sc, w, h, false, farX, 0, -inwardX, y + inwardY * 3, y + inwardY * 24, out _, half: 20);
+                tipY = EdgePoints(lens, sc, w, h, true, farY, 0, -inwardY, x + inwardX * 3, x + inwardX * 24, out _, half: 20);
+            }
             return new CornerFit
             {
                 Point = corner, InliersX = inX, SamplesX = samplesX, InliersY = inY, SamplesY = samplesY, RmsX = rmsX, RmsY = rmsY,
-                AngleDeg = angle, ArmXMm = spanX, ArmYMm = spanY, AX = ax, BX = bxs, AY = ay, BY = bys, PointsX = ptsX, PointsY = ptsY
+                AngleDeg = angle, ArmXMm = spanX, ArmYMm = spanY, AX = ax, BX = bxs, AY = ay, BY = bys, PointsX = ptsX, PointsY = ptsY, TipX = tipX, TipY = tipY
             };
         }
 
@@ -276,9 +284,9 @@ namespace KopruKesim.Vision
         /// 0,25 mm adim). Disaridan ilk kez puan 0,5'i gectigi ve sonraki 4 mm boyunca 0,5 ustunde kaldigi yer kenardir.
         /// </summary>
         static List<Point2> EdgePoints(LensCalibration lens, float[] sc, int w, int h, bool alongX, double ca, double cb, int inward,
-            double from, double to, out int samples)
+            double from, double to, out int samples, double half = 10)
         {
-            const double half = 10, ds = 0.25, along = 2, hold = 4;
+            const double ds = 0.25, along = 2, hold = 4;
             int m = (int)(2 * half / ds) + 1, holdN = (int)(hold / ds);
             int count = Math.Max(2, (int)(Math.Abs(to - from) / along) + 1);
             samples = count;

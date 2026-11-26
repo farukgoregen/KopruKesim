@@ -51,30 +51,65 @@ namespace KopruKesim.Core
         /// koselerin de gorundugu bir kalibrasyondan biliniyorsa (mavi paspasli kalibrasyon).
         /// </summary>
         public bool FixIntrinsics;
+        /// <summary>Tabla duzlemine dik, isaretli kamera yuksekligi. Sifirsa yukseklik serbest cozulur.</summary>
+        public double CameraZMm;
+        /// <summary>
+        /// Optik merkez (Cx, Cy) de cozulur. Kose damalari goruntunun dort kosesine yayildiginda belirlenebilir
+        /// (2026-11-26, yeni kamera: iki fotografta (1941, 1093) +-3 px; goruntu ortasi 1920, 1080 degil).
+        /// </summary>
+        public bool FreePrincipalPoint;
+        /// <summary>Balik gozu bukulme formulu (LensDistortion): K1 K2 cozulur, K3 = 0 sabit.</summary>
+        public bool Fisheye;
         /// <summary>Damalarin yeniden izdusum hatasi (piksel, nokta basina rms).</summary>
         public double RmsPx = double.NaN;
         public int Iterations;
+
+        private bool FixedParameter(int index) => (FixIntrinsics && index < 4) || (CameraZMm != 0 && index == 9) || (Fisheye && index == 3);
+
+        private double[] Translation(double[] p, double[] rotation)
+        {
+            double tz = p[9];
+            // The camera origin is -R^T t, so solve its Z equation for t.Z.
+            if (CameraZMm != 0)
+                tz = (-CameraZMm - rotation[2] * p[7] - rotation[5] * p[8]) / rotation[8];
+            return new[] { p[7], p[8], tz };
+        }
 
         private double[] Pack()
         {
             var p = new List<double> { F, K1, K2, K3, Rvec[0], Rvec[1], Rvec[2], Tvec[0], Tvec[1], Tvec[2] };
             foreach (Board b in Boards) if (!b.Fixed) { p.Add(b.X); p.Add(b.Y); p.Add(b.Theta); }
+            // Optik merkez en sonda (yerlesim parametrelerinin sirasi degismez)
+            if (FreePrincipalPoint) { p.Add(Cx); p.Add(Cy); }
             return p.ToArray();
         }
 
         private void Unpack(double[] p)
         {
             F = p[0]; K1 = p[1]; K2 = p[2]; K3 = p[3];
-            Rvec = new[] { p[4], p[5], p[6] }; Tvec = new[] { p[7], p[8], p[9] };
+            Rvec = new[] { p[4], p[5], p[6] }; Tvec = Translation(p, Rotations.FromRvec(Rvec));
             int k = 10;
             foreach (Board b in Boards) if (!b.Fixed) { b.X = p[k++]; b.Y = p[k++]; b.Theta = p[k++]; }
+            if (FreePrincipalPoint) { Cx = p[k++]; Cy = p[k++]; }
         }
 
+        private int CenterIndex => FreePrincipalPoint ? 10 + 3 * Boards.Count(b => !b.Fixed) : -1;
+
         /// <summary>Duzlem noktasinin (Z = 0) goruntudeki yeri.</summary>
-        public static Point2 Project(double f, double cx, double cy, double k1, double k2, double k3, double[] r, double[] t, double x, double y)
+        public static Point2 Project(double f, double cx, double cy, double k1, double k2, double k3, double[] r, double[] t, double x, double y) =>
+            Project(false, f, cx, cy, k1, k2, k3, r, t, x, y);
+
+        /// <summary>Duzlem noktasinin (Z = 0) goruntudeki yeri; fisheye ise balik gozu formulu (k3 kullanilmaz).</summary>
+        public static Point2 Project(bool fisheye, double f, double cx, double cy, double k1, double k2, double k3, double[] r, double[] t, double x, double y)
         {
             double xc = r[0] * x + r[1] * y + t[0], yc = r[3] * x + r[4] * y + t[1], zc = r[6] * x + r[7] * y + t[2];
-            double u = xc / zc, v = yc / zc, r2 = u * u + v * v;
+            double u = xc / zc, v = yc / zc;
+            if (fisheye)
+            {
+                LensDistortion.Distort(true, new[] { k1, k2 }, u, v, out double ud, out double vd);
+                return new Point2(f * ud + cx, f * vd + cy);
+            }
+            double r2 = u * u + v * v;
             double rad = 1 + r2 * (k1 + r2 * (k2 + r2 * k3));
             return new Point2(f * u * rad + cx, f * v * rad + cy);
         }
@@ -82,7 +117,10 @@ namespace KopruKesim.Core
         private double[] Residuals(double[] p)
         {
             double f = p[0], k1 = p[1], k2 = p[2], k3 = p[3];
-            double[] r = Rotations.FromRvec(new[] { p[4], p[5], p[6] }), t = { p[7], p[8], p[9] };
+            double[] r = Rotations.FromRvec(new[] { p[4], p[5], p[6] });
+            double[] t = Translation(p, r);
+            double cx = Cx, cy = Cy;
+            if (FreePrincipalPoint) { cx = p[CenterIndex]; cy = p[CenterIndex + 1]; }
             var res = new List<double>();
             int k = 10;
             foreach (Board b in Boards)
@@ -93,7 +131,7 @@ namespace KopruKesim.Core
                 for (int i = 0; i < b.Local.Length; i++)
                 {
                     Point2 l = b.Local[i];
-                    Point2 q = Project(f, Cx, Cy, k1, k2, k3, r, t, bx + c * l.X - s * l.Y, by + s * l.X + c * l.Y);
+                    Point2 q = Project(Fisheye, f, cx, cy, k1, k2, k3, r, t, bx + c * l.X - s * l.Y, by + s * l.X + c * l.Y);
                     res.Add(q.X - b.Pixels[i].X);
                     res.Add(q.Y - b.Pixels[i].Y);
                 }
@@ -130,20 +168,29 @@ namespace KopruKesim.Core
         }
 
         /// <summary>Goruntu noktasinin tabla duzlemindeki (Z = 0) yeri: radyal bukulme Newton ile giderilir, isin duzlemle kesisimi.</summary>
-        public static Point2 BackProject(double f, double cx, double cy, double k1, double k2, double k3, double[] r, double[] t, Point2 pixel)
+        public static Point2 BackProject(double f, double cx, double cy, double k1, double k2, double k3, double[] r, double[] t, Point2 pixel) =>
+            BackProject(false, f, cx, cy, k1, k2, k3, r, t, pixel);
+
+        public static Point2 BackProject(bool fisheye, double f, double cx, double cy, double k1, double k2, double k3, double[] r, double[] t, Point2 pixel)
         {
-            double xd = (pixel.X - cx) / f, yd = (pixel.Y - cy) / f;
-            double rd = Math.Sqrt(xd * xd + yd * yd), ru = rd;
-            for (int it = 0; it < 30 && rd > 1e-12; it++)
+            double xd = (pixel.X - cx) / f, yd = (pixel.Y - cy) / f, x, y;
+            if (fisheye)
+                LensDistortion.Undistort(true, new[] { k1, k2 }, xd, yd, out x, out y);
+            else
             {
-                double r2 = ru * ru, g = ru * (1 + r2 * (k1 + r2 * (k2 + r2 * k3))) - rd;
-                double dg = 1 + r2 * (3 * k1 + r2 * (5 * k2 + r2 * 7 * k3));
-                if (Math.Abs(dg) < 1e-12) break;
-                double step = g / dg;
-                ru -= step;
-                if (Math.Abs(step) < 1e-15) break;
+                double rd = Math.Sqrt(xd * xd + yd * yd), ru = rd;
+                for (int it = 0; it < 30 && rd > 1e-12; it++)
+                {
+                    double r2 = ru * ru, g = ru * (1 + r2 * (k1 + r2 * (k2 + r2 * k3))) - rd;
+                    double dg = 1 + r2 * (3 * k1 + r2 * (5 * k2 + r2 * 7 * k3));
+                    if (Math.Abs(dg) < 1e-12) break;
+                    double step = g / dg;
+                    ru -= step;
+                    if (Math.Abs(step) < 1e-15) break;
+                }
+                double sc = rd > 1e-12 ? ru / rd : 1;
+                x = xd * sc; y = yd * sc;
             }
-            double sc = rd > 1e-12 ? ru / rd : 1, x = xd * sc, y = yd * sc;
             // Kamera merkezi C = -R^T t, isin d = R^T (x, y, 1)
             double ccx = -(r[0] * t[0] + r[3] * t[1] + r[6] * t[2]);
             double ccy = -(r[1] * t[0] + r[4] * t[1] + r[7] * t[2]);
@@ -157,7 +204,7 @@ namespace KopruKesim.Core
         public Point2[] LineOnTable(Point2[] pixels)
         {
             double[] r = Rotations.FromRvec(Rvec);
-            return pixels.Select(q => BackProject(F, Cx, Cy, K1, K2, K3, r, Tvec, q)).ToArray();
+            return pixels.Select(q => BackProject(Fisheye, F, Cx, Cy, K1, K2, K3, r, Tvec, q)).ToArray();
         }
 
         private static double Cost(double[] r) { double s = 0; foreach (double v in r) s += v * v; return s; }
@@ -177,8 +224,9 @@ namespace KopruKesim.Core
                 var J = new double[m, n];
                 for (int j = 0; j < n; j++)
                 {
-                    if (FixIntrinsics && j < 4) continue;   // sutun sifir kalir
-                    double h = j == 0 ? 1e-4 : j < 4 ? 1e-7 : j < 7 ? 1e-8 : j < 10 ? 1e-4 : (j - 10) % 3 == 2 ? 1e-8 : 1e-4;
+                    if (FixedParameter(j)) continue;
+                    double h = j == 0 ? 1e-4 : j < 4 ? 1e-7 : j < 7 ? 1e-8 : j < 10 ? 1e-4 : j >= CenterIndex && CenterIndex > 0 ? 1e-3
+                        : (j - 10) % 3 == 2 ? 1e-8 : 1e-4;
                     double keep = p[j];
                     p[j] = keep + h; double[] rp = Residuals(p);
                     p[j] = keep - h; double[] rm = Residuals(p);
@@ -203,7 +251,7 @@ namespace KopruKesim.Core
                 for (int tries = 0; tries < 12; tries++)
                 {
                     var M = (double[,])A.Clone();
-                    for (int a = 0; a < n; a++) M[a, a] += FixIntrinsics && a < 4 ? 1 : lambda * Math.Max(A[a, a], 1e-12);   // sabit lens: adim 0
+                    for (int a = 0; a < n; a++) M[a, a] += FixedParameter(a) ? 1 : lambda * Math.Max(A[a, a], 1e-12);
                     step = SolveLinear(M, g.Select(v => -v).ToArray());
                     if (step == null) { lambda *= 10; continue; }
                     double[] pn = p.Zip(step, (x, d) => x + d).ToArray();

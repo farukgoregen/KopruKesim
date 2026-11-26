@@ -86,6 +86,12 @@ namespace KopruKesim.Vision
         /// </summary>
         public bool RefineFacingEdges = true;
         /// <summary>
+        /// Olcumun son adimi (TableMeasure.RunWithLens, bos tabla varken): dort koseli parcalarin kenarlari ust yuzey
+        /// duzleminde yeniden bulunur (TopEdgeRefiner). Bulunamazsa ya da dedektorden 40 mm'den fazla sapan sonuc onceki
+        /// sonucu degistirmez.
+        /// </summary>
+        public bool RefineTopEdge = true;
+        /// <summary>
         /// Guvenilir cikmayan leke bu caplarla (mm, sirayla) acilip bolunmeye calisilir: birlesik parcalar ve
         /// kenar gurultusuyle birlesmis plakalar ayrilir. Bos dizi = kapali. Plakanin kisa kenari en buyuk captan
         /// genis olmali (daha dar parca bolme sirasinda silinir; ilk denemede guvenilir cikan parcaya dokunulmaz).
@@ -611,6 +617,26 @@ namespace KopruKesim.Vision
             // kenarlari fotografta gercek gecislere oturtarak kurtar. Kurtarma, oturtma dort kenarin
             // hepsinde tutmadiysa (kaba akor kalan kenar varsa) da denenir. T/L gibi gercekten cok koseli
             // parcalarda zarf dortgen vermez ya da alan uymaz, sonuc eskisi gibi kalir.
+            LocatorOptions locator = ScaledLocator(contour);
+            if (r.IsReliable && r.Vertices.Length > 4
+                && r.EdgeLengths.Count(length => length < locator.SimplifyToleranceMm) >= 2)
+            {
+                SlabResult silhouette = SlabLocator.Locate(contour, locator, 0, null);
+                Point2f[] polygon = silhouette?.Vertices.Select(p => new Point2f((float)p.X, (float)p.Y)).ToArray();
+                Point2f[] reduced = polygon == null ? Array.Empty<Point2f>() : Cv2.ApproxPolyDP(polygon, locator.SimplifyToleranceMm * 0.5, true);
+                if (reduced.Length == 4)
+                {
+                    Point2[] quad = reduced.Select(p => new Point2(p.X, p.Y)).ToArray();
+                    Point2[] seed = quad.SelectMany((p, i) => Enumerable.Range(0, 40)
+                        .Select(j => p + (quad[(i + 1) % 4] - p) * (j / 40.0))).ToArray();
+                    SlabResult refined = RefineInImage(frame, seed, SlabLocator.Describe(quad, locator), grad);
+                    if (_refineUsed >= 3 && IsSplitQuadOk(refined))
+                    {
+                        Assess(refined, contour);
+                        if (refined.IsReliable) { r = refined; used = snapped = _refineUsed; }
+                    }
+                }
+            }
             if (!r.IsReliable || (r.Vertices != null && r.Vertices.Length == 4 && used < 4))
             {
                 SlabResult rescued = RefineQuadFromHull(frame, contour, grad);
@@ -932,7 +958,7 @@ namespace KopruKesim.Vision
             {
                 List<Point2>[] pts = pass == 0 ? samples : EdgePointFit.Sample(cur, Math.Max(4, _opt.RefinePointsPerEdge));
                 if (g == null) g = grad != null ? grad() : EdgePointFit.Gradients(frame);
-                EdgeFitResult snapped = EdgePointFit.Fit(frame, pts, rMax, pass == 0 ? none : outermost, g);
+                EdgeFitResult snapped = EdgePointFit.Fit(frame, pts, radius, pass == 0 ? none : outermost, g);
                 EdgeFitResult plain = EdgePointFit.Fit(frame, pts, 0);
                 if (snapped.Edges == null || plain.Edges == null) return r;
                 var edges = new FittedEdge[4];
@@ -940,8 +966,7 @@ namespace KopruKesim.Vision
                 for (int e = 0; e < 4; e++)
                 {
                     FittedEdge fe = snapped.Edges[e];
-                    int[] ok = Enumerable.Range(0, fe.Points.Length).Where(i => fe.Snapped[i] && fe.Inlier[i]
-                        && Point2.Distance(fe.Points[i], pts[e][i]) <= radius[e]).ToArray();
+                    int[] ok = Enumerable.Range(0, fe.Points.Length).Where(i => fe.Snapped[i] && fe.Inlier[i]).ToArray();
                     bool spread = ok.Length >= 4 && ok.Max() - ok.Min() >= fe.Points.Length / 4;
                     bool final = ok.Length * 2 >= fe.Points.Length && fe.Straight;
                     if (confirmed != null) confirmed[e] = refine[e] && final;

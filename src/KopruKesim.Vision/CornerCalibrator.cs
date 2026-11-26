@@ -101,6 +101,8 @@ namespace KopruKesim.Vision
             }
 
             // Parametreler: 0-2 donme, 3-5 oteleme, 6 odak, 7 k1, 8 k2, 9 k3
+            // Bu cozum radyal formulu kullanir; balik gozu lensi (L + dama kalibrasyonu) burada yorumlanamaz, lens yokmus gibi
+            if (lens != null && lens.Fisheye) lens = null;
             int n = clicked.Length;
             double f0 = lens != null ? lens.Fx : 0.42 * w;
             var p = new double[10];
@@ -401,7 +403,7 @@ namespace KopruKesim.Vision
         /// Sinirli Levenberg-Marquardt, sayisal Jacobian. robust > 0 ise yumusak L1 (Huber benzeri) agirliklar: |r| bu
         /// olcegin cok uzerindeki artiklar (aykiri kenar noktalari) cozumu cekmez.
         /// </summary>
-        private static double[] Lm(Func<double[], double[]> f, double[] p0, double[] lo, double[] hi, double robust)
+        internal static double[] Lm(Func<double[], double[]> f, double[] p0, double[] lo, double[] hi, double robust)
         {
             int m = p0.Length;
             var p = (double[])p0.Clone();

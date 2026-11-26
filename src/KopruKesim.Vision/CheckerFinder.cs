@@ -35,16 +35,16 @@ namespace KopruKesim.Vision
         }
 
         /// <summary>Fotograftaki butun desenler (numarasiz): merkez ve ic koseler. Kamera kalibrasyonu kullanir.</summary>
-        public static List<KeyValuePair<Point2, Point2[]>> FindAll(Mat frame, int innerCols, int innerRows)
+        public static List<KeyValuePair<Point2, Point2[]>> FindAll(Mat frame, int innerCols, int innerRows, int expectedCount = 0)
         {
             using (var gray = new Mat())
             {
                 if (frame.Channels() == 1) frame.CopyTo(gray); else Cv2.CvtColor(frame, gray, ColorConversionCodes.BGR2GRAY);
-                return FindBoards(gray, innerCols, innerRows).Select(b => new KeyValuePair<Point2, Point2[]>(b.Center, b.Corners)).ToList();
+                return FindBoards(gray, innerCols, innerRows, expectedCount).Select(b => new KeyValuePair<Point2, Point2[]>(b.Center, b.Corners)).ToList();
             }
         }
 
-        private static List<Board> FindBoards(Mat gray, int cols, int rows)
+        private static List<Board> FindBoards(Mat gray, int cols, int rows, int expectedCount)
         {
             var size = new Size(cols, rows);
             // 1) Kaba yerler: olcek piramidi + ust uste binen karolar. Bir olcekte karoya sigmayan buyuk etiket
@@ -78,7 +78,36 @@ namespace KopruKesim.Vision
                     else if (b.Residual < found[same].Residual) found[same] = b;
                 }
             }
+            if (found.Count < expectedCount) FindMissingBoards(gray, size, expectedCount, found);
             return found;
+        }
+
+        private static void FindMissingBoards(Mat gray, Size pattern, int expectedCount, List<Board> boards)
+        {
+            int width = Math.Max(1, gray.Cols / 3);
+            int height = Math.Max(1, gray.Rows / 3);
+            foreach (int magnification in new[] { 1, 2 })
+            foreach (int y in Starts(gray.Rows, height))
+            foreach (int x in Starts(gray.Cols, width))
+            {
+                var area = new Rect(x, y, width, height);
+                using (var crop = new Mat(gray, area))
+                using (var image = new Mat())
+                {
+                    double scale = Math.Min(magnification, 1400.0 / Math.Max(width, height));
+                    Cv2.Resize(crop, image, new Size(), scale, scale, scale < 1 ? InterpolationFlags.Area : InterpolationFlags.Cubic);
+                    if (!Cv2.FindChessboardCornersSB(image, pattern, out Point2f[] corners, ChessboardFlags.Exhaustive))
+                        continue;
+
+                    double sx = image.Cols / (double)width, sy = image.Rows / (double)height;
+                    var points = corners.Select(p => new Point2((p.X + 0.5) / sx - 0.5 + x, (p.Y + 0.5) / sy - 0.5 + y)).ToArray();
+                    Board candidate = Check(points, pattern);
+                    if (candidate == null || boards.Any(b => Point2.Distance(b.Center, candidate.Center) < 2 * Math.Max(b.Step, candidate.Step)))
+                        continue;
+                    boards.Add(Refine(gray, candidate.Box, pattern) ?? candidate);
+                    if (boards.Count == expectedCount) return;
+                }
+            }
         }
 
         /// <summary>Goruntuyu (k, ky) olcegine getirip karolarda desen arar; yeni kaba yerleri ekler.</summary>

@@ -97,7 +97,11 @@ namespace KopruKesim.Vision
         /// <param name="outermost">Kenar basina: en guclu yerine en distaki guclu gecis (en gucluun yarisindan buyuk) alinsin.
         /// Dis yon dort kenarin noktalarinin ortasindan uzaklasan yondur. null: hepsi en guclu.</param>
         /// <param name="precomputed">Onceden hesaplanmis gradyan; null ise (snapPx > 0 oldugunda) bu cagrida hesaplanir.</param>
-        public static EdgeFitResult Fit(Mat frame, IList<List<Point2>> edgePoints, double snapPx, bool[] outermost = null, GradientField precomputed = null)
+        public static EdgeFitResult Fit(Mat frame, IList<List<Point2>> edgePoints, double snapPx, bool[] outermost = null, GradientField precomputed = null) =>
+            Fit(frame, edgePoints, new[] { snapPx, snapPx, snapPx, snapPx }, outermost, precomputed);
+
+        internal static EdgeFitResult Fit(Mat frame, IList<List<Point2>> edgePoints, double[] radii,
+            bool[] outermost = null, GradientField precomputed = null)
         {
             var result = new EdgeFitResult();
             if (edgePoints == null || edgePoints.Count != 4 || edgePoints.Any(l => l == null || l.Count < 2))
@@ -107,7 +111,7 @@ namespace KopruKesim.Vision
             }
             int w = frame.Cols, h = frame.Rows;
             float[] gx = null, gy = null;
-            if (snapPx > 0)
+            if (radii.Any(r => r > 0))
             {
                 GradientField g = precomputed ?? Gradients(frame);
                 gx = g.Gx; gy = g.Gy; w = g.W; h = g.H;
@@ -115,6 +119,7 @@ namespace KopruKesim.Vision
             result.Edges = new FittedEdge[4];
             for (int e = 0; e < 4; e++)
             {
+                double snapPx = radii[e];
                 List<Point2> pts = edgePoints[e];
                 // Kenar yonu: noktalarin ilk dogrusu (oturtmanin hangi yone arayacagini belirler)
                 double a0, b0, c0;
@@ -190,6 +195,7 @@ namespace KopruKesim.Vision
                 double den = l - 2 * c + rr;
                 if (Math.Abs(den) > 1e-9) off += Math.Max(-0.5, Math.Min(0.5, 0.5 * (l - rr) / den)) * step;
             }
+            if (Math.Abs(off) > r) return false;
             snapped = new Point2(p.X + n.X * off, p.Y + n.Y * off);
             return true;
         }

@@ -298,8 +298,22 @@
       </div>
       <p class="ipucu-kucuk" id="kalDurum">Kalibrasyon yok.</p>
       <div id="kalDetay" style="margin-top: 14px">
+        <details style="margin-bottom: 14px">
+          <summary>Altı damalı kalibrasyon (sabit kamera yüksekliği)</summary>
+          <div class="satir">
+            <label class="alan">Altı damalı tabla fotoğrafı<input id="lensTablaFoto" type="file" accept="image/*"></label>
+            <label class="alan">Tabla uzunluğu (mm)<input id="lensTablaUzunluk" type="number" step="0.1" value="3294"></label>
+            <label class="alan">Tabla genişliği (mm)<input id="lensTablaGenislik" type="number" step="0.1" value="1990"></label>
+          </div>
+          <div class="satir">
+            <label class="alan">Kamera ile tabla arası dik mesafe (mm)<input id="lensKameraYukseklik" type="number" min="100" max="20000" step="0.1" value="2032.5"></label>
+            <button type="button" class="dugme ikincil" id="lensSabitHesapla">Altı damadan sabit yükseklikle hesapla</button>
+          </div>
+          <p class="ipucu-kucuk" id="lensCokluSonuc" role="status"></p>
+        </details>
         <h3 style="margin: 0 0 4px">1. L köşe kalibrasyonu</h3>
-        <p class="ipucu-kucuk">Dört turkuaz L parçasını tablanın köşelerine tam oturtun. Tabla boşken kalibrasyon fotoğrafını çekin: program L'lerin dış kenarlarından tablanın köşelerini bulur ve yukarıdaki şerit ölçülerine oturtur. Lens bükülmesi ve kamera konumu kayıtlı kalibrasyondan alınır.</p>
+        <p class="ipucu-kucuk">Dört turkuaz L parçasını tablanın köşelerine tam oturtun, her L'nin içine bir A4 dama (9 × 6 iç köşe, 25 mm kare) koyun. Tabla boşken kalibrasyon fotoğrafını çekin: lens bükülmesi ve kamera konumu damalardan, tabla köşeleri L'lerin dış kenarlarından bulunur; tabla yukarıdaki şerit ölçülerine oturtulur. 5 mm dış duvar payı uygulanır.</p>
+        <label class="alan">Kamera merceği ile tabla arası dik mesafe (mm)<input id="kalKameraYukseklik" type="number" min="100" max="20000" step="0.1" value="2032.5"></label>
         <div class="satir" style="margin-top: 8px">
           <button type="button" class="dugme ikincil" id="kalKamera" hidden>IP kameradan kalibre et</button>
           <button type="button" class="dugme ikincil" id="kalYukle">Kalibrasyon fotoğrafı yükle</button>
@@ -1311,6 +1325,35 @@
   $("kamKes").onclick = async () => { try { kamDurumYaz(await istek("/api/kamera/kapat", new FormData())); } catch (e) { hata(e.message); } };
   // Olcum yalniz dugmeye basilinca: o anda kameradan taze bir fotograf alinir ve yuklenen fotograf gibi
   // olculur (cizim, kayit, tum yollar ayni). Kamera bagliyken kendiliginden ya da surekli olcum yapilmaz.
+  $("lensSabitHesapla").onclick = async () => {
+    const button = $("lensSabitHesapla");
+    const status = $("lensCokluSonuc");
+    const table = $("lensTablaFoto").files[0];
+    if (!table) {
+      status.textContent = "Altı damalı tabla fotoğrafını seçin.";
+      return;
+    }
+    const form = new FormData();
+    form.append("dosya", table);
+    form.append("uzunluk", $("lensTablaUzunluk").value);
+    form.append("genislik", $("lensTablaGenislik").value);
+    form.append("kameraYukseklikMm", $("lensKameraYukseklik").value);
+    form.append("etiket", "normal");
+    button.disabled = true;
+    status.textContent = "Lens, ölçülen kamera yüksekliğiyle hesaplanıyor…";
+    try {
+      const result = await istek("/api/kalibrasyon", form);
+      const k = result.kalibrasyon;
+      kalDurumYaz(k);
+      status.textContent = `Kamera yüksekliği ${k.kamera.z} mm. Dama referansında en büyük hata ${k.enKotuMm.toFixed(2)} mm. ${(result.uyarilar || []).join(" ")}`;
+      if (gorunum === "kalibrasyon") ciz();
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      button.disabled = false;
+    }
+  };
+
   // ---------- Kamera kalibrasyonu (lens + tabla, bir kez) ----------
   async function kalibrasyonIncele(canvas) {
     const panel = document.createElement("section");
@@ -1432,7 +1475,8 @@
     const f = new FormData();
     f.append("dosya", dosya);
     tablaOlculeri(f);
-    hata(""); $("kalSonuc").textContent = "L köşeleri aranıyor…";
+    f.append("kameraYukseklikMm", $("kalKameraYukseklik").value);
+    hata(""); $("kalSonuc").textContent = "Damalardan lens hesaplanıyor, L köşeleri aranıyor…";
     try {
       const r = await istek("/api/kalibrasyon", f);
       gorunum = "kalibrasyon";
