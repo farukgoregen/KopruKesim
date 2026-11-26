@@ -341,6 +341,122 @@ static class Program
             PlanarBundle.Project(f, 960, 540, k1, k2, k3, R, tv, 3200, 1950));
         Check(okFixed && fixedLens.RmsPx < 0.01 && camErr < 0.05, $"sabit lensle kamera konumu iki damadan bulundu (kosede {camErr:F3} px)");
 
+        var fixedHeight = new PlanarBundle
+        {
+            F = f * 0.99, Cx = 960, Cy = 540, K1 = k1, K2 = k2, K3 = k3,
+            Rvec = new[] { -2.95, 0.035, 0.03 }, Tvec = new[] { -1690.0, 1090.0, 1550.0 },
+            CameraZMm = 2000
+        };
+        double[] tAt2000 = (double[])tv.Clone();
+        double height = -(R[2] * tv[0] + R[5] * tv[1] + R[8] * tv[2]);
+        for (int i = 0; i < 3; i++) tAt2000[i] -= R[3 * i + 2] * (2000 - height);
+        for (int b = 0; b < 6; b++)
+        {
+            var place = new BoardPlacement(truth[b, 0], truth[b, 1], truth[b, 2]);
+            fixedHeight.Boards.Add(new PlanarBundle.Board
+            {
+                Local = local.ToArray(),
+                Pixels = local.Select(p =>
+                {
+                    Point2 q = place.Apply(p);
+                    return PlanarBundle.Project(f, 960, 540, k1, k2, k3, R, tAt2000, q.X, q.Y);
+                }).ToArray(),
+                X = place.X, Y = place.Y, Theta = place.RotationDeg * Math.PI / 180, Fixed = b == 3
+            });
+        }
+        bool okHeight = fixedHeight.Solve();
+        fixedHeight.Reframe(phi, shift);
+        double measuredHeight = new LensCalibration { Rvec = fixedHeight.Rvec, Tvec = fixedHeight.Tvec }.CameraPosition().Height;
+        Check(okHeight && Math.Abs(measuredHeight - 2000) < 1e-6 && fixedHeight.RmsPx < 0.01,
+            $"kamera yuksekligi cozum ve tabla cercevesi degisiminden sonra sabit: {measuredHeight:F3} mm");
+
+        // L + dama: yalniz dort kose damasi, optik merkez goruntu ortasinda degil (981, 552), yukseklik sabit.
+        // Merkez ortaya (960, 540) sabitlenirse ve serbest birakilirsa.
+        double tcx = 981, tcy = 552;
+        PlanarBundle CornerBundle(bool freeCenter)
+        {
+            var cb = new PlanarBundle
+            {
+                F = f * 1.02, Cx = 960, Cy = 540, K1 = k1 * 0.8, K2 = k2, K3 = k3,
+                Rvec = new[] { -2.95, 0.035, 0.03 }, Tvec = (double[])tAt2000.Clone(), CameraZMm = 2000, FreePrincipalPoint = freeCenter
+            };
+            var noise = new Random(11);
+            foreach (int b in new[] { 0, 2, 3, 5 })
+            {
+                var place = new BoardPlacement(truth[b, 0], truth[b, 1], truth[b, 2]);
+                cb.Boards.Add(new PlanarBundle.Board
+                {
+                    Local = local.ToArray(),
+                    Pixels = local.Select(p =>
+                    {
+                        Point2 q = PlanarBundle.Project(f, tcx, tcy, k1, k2, k3, R, tAt2000, place.Apply(p).X, place.Apply(p).Y);
+                        return new Point2(q.X + (noise.NextDouble() - 0.5) * 0.3, q.Y + (noise.NextDouble() - 0.5) * 0.3);
+                    }).ToArray(),
+                    X = nominal[b, 0], Y = nominal[b, 1], Theta = 0, Fixed = b == 3
+                });
+                if (b == 3) { cb.Boards[cb.Boards.Count - 1].X = truth[3, 0]; cb.Boards[cb.Boards.Count - 1].Y = truth[3, 1]; }
+            }
+            cb.Solve();
+            return cb;
+        }
+        PlanarBundle freeC = CornerBundle(true), fixedC = CornerBundle(false);
+        // Tabla ortasinda 1500 mm'lik cizgi: gercek lensle piksele, cozulen lensle geri
+        double MidLine(PlanarBundle cb)
+        {
+            double[] rr = Rotations.FromRvec(cb.Rvec);
+            Point2 a = PlanarBundle.BackProject(cb.F, cb.Cx, cb.Cy, cb.K1, cb.K2, cb.K3, rr, cb.Tvec, PlanarBundle.Project(f, tcx, tcy, k1, k2, k3, R, tAt2000, 900, 1000));
+            Point2 b2 = PlanarBundle.BackProject(cb.F, cb.Cx, cb.Cy, cb.K1, cb.K2, cb.K3, rr, cb.Tvec, PlanarBundle.Project(f, tcx, tcy, k1, k2, k3, R, tAt2000, 2400, 1000));
+            return Point2.Distance(a, b2);
+        }
+        Check(Math.Abs(freeC.Cx - tcx) < 3 && Math.Abs(freeC.Cy - tcy) < 3 && freeC.RmsPx < 0.2,
+            $"dort kose damasindan optik merkez bulundu: ({freeC.Cx:F1}, {freeC.Cy:F1}), gercek ({tcx}, {tcy}), {freeC.RmsPx:F3} px");
+        Check(Math.Abs(MidLine(freeC) - 1500) < 1.0,
+            $"serbest merkezle ortadaki 1500 mm cizgi {MidLine(freeC):F2} mm (merkez ortaya sabitlenince {MidLine(fixedC):F2} mm, {fixedC.RmsPx:F2} px)");
+
+        // Balik gozu formulu: gidis-donus, ve dort kose damasindan geri bulunmasi (gercek kameraya yakin k1 k2)
+        double fk1 = -0.035, fk2 = -0.004;
+        double worstRound = 0;
+        for (double ang = 0.05; ang < 1.2; ang += 0.05)
+        {
+            double xu = Math.Tan(ang) * 0.8, yu = Math.Tan(ang) * 0.6;
+            LensDistortion.Distort(true, new[] { fk1, fk2 }, xu, yu, out double xdd, out double ydd);
+            LensDistortion.Undistort(true, new[] { fk1, fk2 }, xdd, ydd, out double xb, out double yb);
+            worstRound = Math.Max(worstRound, Math.Abs(xb - xu) + Math.Abs(yb - yu));
+        }
+        Check(worstRound < 1e-10, $"balik gozu gidis-donus ayni ({worstRound:E1})");
+        var fe = new PlanarBundle
+        {
+            F = f * 1.02, Cx = 975, Cy = 548, K1 = 0, K2 = 0, K3 = 0, Fisheye = true, FreePrincipalPoint = true,
+            Rvec = new[] { -2.95, 0.035, 0.03 }, Tvec = (double[])tAt2000.Clone(), CameraZMm = 2000
+        };
+        foreach (int b in new[] { 0, 2, 3, 5 })
+        {
+            var place = new BoardPlacement(truth[b, 0], truth[b, 1], truth[b, 2]);
+            fe.Boards.Add(new PlanarBundle.Board
+            {
+                Local = local.ToArray(),
+                Pixels = local.Select(p => PlanarBundle.Project(true, f, tcx, tcy, fk1, fk2, 0, R, tAt2000, place.Apply(p).X, place.Apply(p).Y)).ToArray(),
+                X = b == 3 ? truth[3, 0] : nominal[b, 0], Y = b == 3 ? truth[3, 1] : nominal[b, 1], Theta = 0, Fixed = b == 3
+            });
+        }
+        bool okFe = fe.Solve();
+        double[] rfe = Rotations.FromRvec(fe.Rvec);
+        Point2 feA = PlanarBundle.BackProject(true, fe.F, fe.Cx, fe.Cy, fe.K1, fe.K2, 0, rfe, fe.Tvec, PlanarBundle.Project(true, f, tcx, tcy, fk1, fk2, 0, R, tAt2000, 900, 1000));
+        Point2 feB = PlanarBundle.BackProject(true, fe.F, fe.Cx, fe.Cy, fe.K1, fe.K2, 0, rfe, fe.Tvec, PlanarBundle.Project(true, f, tcx, tcy, fk1, fk2, 0, R, tAt2000, 2400, 1000));
+        Check(okFe && fe.RmsPx < 0.01 && fe.K3 == 0 && Math.Abs(Point2.Distance(feA, feB) - 1500) < 0.1,
+            $"balik gozu lens dort kose damasindan: k {fe.K1:F4} {fe.K2:F4} (gercek {fk1} {fk2}), ortadaki 1500 mm cizgi {Point2.Distance(feA, feB):F2} mm");
+        var feCal = new LensCalibration { Fx = fe.F, Fy = fe.F, Cx = fe.Cx, Cy = fe.Cy, Distortion = new[] { fe.K1, fe.K2, 0, 0, 0 }, Fisheye = true, Rvec = fe.Rvec, Tvec = fe.Tvec, ImageWidth = 1920, ImageHeight = 1080 };
+        string feFile = Path.Combine(Path.GetTempPath(), "kk_balikgozu_test.txt");
+        feCal.Save(feFile);
+        LensCalibration feBack = LensCalibration.Load(feFile);
+        File.Delete(feFile);
+        var radialBack = new LensCalibration { Fx = 1, Rvec = new double[3], Tvec = new double[3], ImageWidth = 1 };
+        radialBack.Save(feFile);
+        bool oldIsRadial = !LensCalibration.Load(feFile).Fisheye;
+        File.Delete(feFile);
+        Check(feBack.Fisheye && feBack.Distortion[0] == fe.K1 && feBack.Distortion[1] == fe.K2 && oldIsRadial,
+            "balik gozu kalibrasyon kaydi geri okunuyor; radyal kayit radyal kaliyor");
+
         PlanarBundle.RigidFit(new[] { new Point2(0, 0), new Point2(10, 0), new Point2(0, 5) },
             new[] { new Point2(3, 4), new Point2(3, 14), new Point2(-2, 4) }, out double fitPhi, out Point2 fitShift);
         Check(Math.Abs(fitPhi - Math.PI / 2) < 1e-9 && Point2.Distance(fitShift, new Point2(3, 4)) < 1e-9, "rijit oturtma");

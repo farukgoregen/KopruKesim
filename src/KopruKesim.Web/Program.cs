@@ -84,6 +84,9 @@ var gate = new object();
 string dataDir = app.Configuration["veri"] is string veri && veri.Length > 0 ? veri : @"D:\SMO\photos";
 // Olcum goruntusu (ekran ve olcumler klasoru): tablanin 3300 x 2000 mm'lik alani, 1 piksel = 1 mm
 const double DisplayLengthMm = 3300, DisplayWidthMm = 2000;
+// Kamera merceginden tablaya dik mesafe: kullanici olcumu 2030-2035 mm (yeni kamera, 2026-11-26)
+const double DefaultCameraHeightMm = 2032.5;
+var tr = CultureInfo.GetCultureInfo("tr-TR");
 Directory.CreateDirectory(dataDir);
 
 IResult Fail(string message) => Results.Json(new { hata = message }, statusCode: 400);
@@ -361,7 +364,14 @@ app.MapPost("/api/kalibrasyon", async (HttpRequest req) =>
     if (bytes == null) return Fail("Fotoğraf gelmedi.");
     double Num(string key) => double.TryParse(form[key].ToString().Replace(',', '.'), NumberStyles.Float, inv, out double v) && double.IsFinite(v) ? v : double.NaN;
     // L kose parcalariyla kalibrasyon: tablanin dort kenari ve kosegenler (L'lerin dis koseleri arasi) ayri ayri girilir
-    if (form.ContainsKey("alt")) return CalibrateWithLCorners(bytes, SidesFromForm(Num));
+    if (form.ContainsKey("alt"))
+    {
+        // Kamera merceginden tablaya dik mesafe (kullanici olcumu 2030-2035 mm, 2026-11-26)
+        double measuredHeight = form.ContainsKey("kameraYukseklikMm") ? Num("kameraYukseklikMm") : DefaultCameraHeightMm;
+        if (!(measuredHeight >= 100 && measuredHeight <= 20000))
+            return Fail("Kamera ile tabla arasındaki dik mesafeyi mm olarak girin.");
+        return CalibrateWithLCorners(bytes, SidesFromForm(Num), measuredHeight);
+    }
     double length = double.TryParse(form["uzunluk"], NumberStyles.Float, inv, out double l) && l > 0 ? l : 0;
     double width = double.TryParse(form["genislik"], NumberStyles.Float, inv, out double w) && w > 0 ? w : 0;
     if (!double.IsFinite(length) || !double.IsFinite(width) || length <= 0 || width <= 0)
@@ -387,6 +397,9 @@ app.MapPost("/api/kalibrasyon", async (HttpRequest req) =>
             || measuredCenters.Take(3).Min(p => p.Y) <= measuredCenters.Skip(3).Max(p => p.Y))
             return Fail("Dama merkezlerini önce üst sırada 1–3, sonra alt sırada 4–6, her sırada soldan sağa girin. Y sol alttan yukarı artar.");
     }
+    double? cameraHeight = form.ContainsKey("kameraYukseklikMm") ? Num("kameraYukseklikMm") : null;
+    if (cameraHeight.HasValue && !(cameraHeight.Value >= 100 && cameraHeight.Value <= 20000))
+        return Fail("Kamera ile tabla arasındaki dik mesafeyi mm olarak girin.");
     string type = form["etiket"].ToString();
     CalibrationTag[] tags = type == "otomatik" ? CalibrationTag.All : new[] { LensTag(type) };
     lock (gate)
@@ -396,7 +409,7 @@ app.MapPost("/api/kalibrasyon", async (HttpRequest req) =>
         LensCalibrator.Result best = null;
         foreach (CalibrationTag tag in tags)
         {
-            LensCalibrator.Result r = LensCalibrator.Calibrate(frame, length, width, tag, measuredCenters);
+            LensCalibrator.Result r = LensCalibrator.Calibrate(frame, length, width, tag, measuredCenters, cameraHeight);
             if (r.Calibration != null && r.Calibration.MeetsReferenceTolerance) { best = r; break; }
             if (best == null || (r.Calibration != null
                 ? best.Calibration == null || r.Calibration.MaxMm < best.Calibration.MaxMm
@@ -495,59 +508,37 @@ static Point2[] CalibrationArea(Point2[] table)
     return new[] { tl, br + (tl - bl), bl, br };
 }
 
-// L kose kalibrasyonu: dort turkuaz L parcasi tablanin koselerinde (dis kosesi tabla kosesi), tabla kenarlari L'lerin
-// dis koseleri arasindan seritle olculmus. Lens ve kamera konumu kayitli kalibrasyondan (yoksa kamera-lens.txt);
-// fotograftan yalniz dort tabla kosesi bulunur ve seritle olculen tablaya oturtulur.
-IResult CalibrateWithLCorners(byte[] bytes, TableSides sides)
+// L + dama kalibrasyonu: lens ve kamera konumu dort kose damasindan (CheckerLensCalibrator), tabla koseleri bu lensle
+// L parcalarinin dis kenarlarindan; seritle olculen dis koseler tabla cercevesini verir.
+IResult CalibrateWithLCorners(byte[] bytes, TableSides sides, double heightMm)
 {
     Point2[] tape = TapeCorners(sides, out string tapeError);
     if (tape == null) return Fail(tapeError);
     lock (gate)
     {
-        using Mat decoded = Cv2.ImDecode(bytes, ImreadModes.Color);
-        if (decoded.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
+        using Mat frame = Cv2.ImDecode(bytes, ImreadModes.Color);
+        if (frame.Empty()) return Fail("Dosya bir görüntü olarak okunamadı.");
         Directory.CreateDirectory(lensDir);
-        // Son deneme her durumda saklanir (basarisiz kalibrasyonu sonradan incelemek icin)
         File.WriteAllBytes(Path.Combine(lensDir, "son-deneme.jpg"), bytes);
-        LensCalibration camLens = LoadCameraLens(), current = LoadLens();
-        LensCalibration known = current ?? camLens;
-        // Kucultulmus fotograf (ayni en-boy orani, ornegin WhatsApp kopyasi 2000x1125): kamera cozunurlugune buyutulur.
-        // Lens modeli kameranin piksel olcegindedir; buyutme ayni goruntuyu verir ama kenarlar daha kaba bulunur (uyari).
-        int origW = decoded.Cols, origH = decoded.Rows;
-        bool scaled = known != null && origW < known.ImageWidth && origH < known.ImageHeight
-            && Math.Abs((double)origW / origH - (double)known.ImageWidth / known.ImageHeight) < 0.005;
-        using Mat frame = new Mat();
-        if (scaled)
-        {
-            Cv2.Resize(decoded, frame, new Size(known.ImageWidth, known.ImageHeight), 0, 0, InterpolationFlags.Cubic);
-            bytes = frame.ImEncode(".jpg", new ImageEncodingParam(ImwriteFlags.JpegQuality, 95));
-        }
-        else decoded.CopyTo(frame);
-        bool Fits(LensCalibration c) => c != null && c.ImageWidth == frame.Cols && c.ImageHeight == frame.Rows;
-        LensCalibration source = Fits(current) ? current : Fits(camLens) ? camLens : null;
-        if (source == null && known != null)
-            return Fail($"Bu fotoğraf {frame.Cols}x{frame.Rows} piksel, kamera {known.ImageWidth}x{known.ImageHeight}. Kameranın kendi tam çözünürlüklü fotoğrafını kullanın "
-                + "(IP kameradan kalibre edin ya da kameradan alınan dosyayı yükleyin; WhatsApp gibi uygulamalar fotoğrafı küçültür).");
-        if (source == null)
-            return Fail($"Bu kamera için {frame.Cols}x{frame.Rows} çözünürlükte kayıtlı lens ve kamera konumu yok. L parçaları tablanın köşelerini verir ama lens bükülmesini çözemez; bir kez altı damalı kalibrasyon gerekir.");
-        LensCalibration raw = source.WithoutCorrection();
-        // Koselerin modeldeki tahmini: onceki kalibrasyonda bulunan koseler, yoksa kagit koseleri, yoksa girilen tabla
-        Point2[] expected = source.Correction != null ? source.Correction.Measured.Take(4).ToArray()
-            : source.PaperCorners != null && source.PaperCorners.Length == 4 ? source.PaperCorners : tape;
-        LCornerFinder.Result found = LCornerFinder.Find(frame, raw, expected);
-        if (found.Corners == null) return Fail(found.Error + " Fotoğraf incelenmek üzere kaydedildi (kalibrasyon\\son-deneme.jpg).");
+        var fit = CheckerLensCalibrator.Calibrate(frame, tape, heightMm);
+        if (fit.Lens == null) return Fail(fit.Error + " Fotoğraf incelenmek üzere kaydedildi.");
+        LensCalibration raw = fit.Lens;
+        LCornerFinder.Result found = fit.Corners;
         // Tabla koseleri L'nin dis kenarlarinin duvar kalinligi kadar icinde. Kenarlar koseden koseye duz tabla kenari
         // (kullanici karari 2026-11-25: tahtalardaki cikintilara gore kenar egrisi oturtulmaz; TableEdgeCurve kullanilmiyor)
         double wall = LCornerFinder.WallMm;
         Point2[] inner = LCornerFinder.InsetCorners(found, wall);
         LensCalibration cal = WithTape(raw, inner, tape, null, wall);
+        // Denetim: damalarin bu lensle olculen kare boyu (gercek 25 mm) ve L dis koselerinin seritten farki
+        cal.MeanMm = fit.BoardShapeMm.Average();
+        cal.MaxMm = fit.BoardShapeMm.Max();
+        cal.RmsPx = raw.RmsPx;
+        double[] tapeGap = found.Corners.Select((p, i) => Point2.Distance(p, tape[i])).ToArray();
         cal.CornerSource = LensCalibration.CornerSourceL;
         cal.TagType = "L";
         cal.Created = DateTime.Now;
-        cal.EdgeRmsMm = double.NaN;
-        cal.BoardPlacements = null;
-        cal.MeasuredTagCenters = null;
         cal.Save(lensPath);
+        cal.Save(cameraLensPath);
         File.WriteAllBytes(calibrationPhotoPath, bytes);
         SaveCalibrationTopView(frame, cal);
         // Inceleme: dort kosenin buyutulmus goruntusu, bulunan kenar noktalari, oturtulan kenar dogrulari ve kose
@@ -564,9 +555,15 @@ IResult CalibrateWithLCorners(byte[] bytes, TableSides sides)
             Point2.Distance(q[2], q[0]), Point2.Distance(q[3], q[1]),
             string.Join("; ", found.Fits.Select((f, i) => string.Format(inv, "{0} uzun {1}/{2} {3:F2} mm, kisa {4}/{5} {6:F2} mm, aci {7:F2}", names[i], f.InliersX, f.SamplesX, f.RmsX, f.InliersY, f.SamplesY, f.RmsY, f.AngleDeg)))));
         var uyarilar = new List<string>();
-        if (scaled)
-            uyarilar.Add($"Fotoğraf {origW}x{origH} pikseldi; kamera çözünürlüğüne ({frame.Cols}x{frame.Rows}) büyütülerek kalibre edildi. "
-                + $"Kenarlar kameranın kendi fotoğrafına göre {(double)frame.Cols / origW:F1} kat kaba bulunur; ilk fırsatta IP kameradan yeniden kalibre edin.");
+        string Mm(IEnumerable<double> v) => string.Join(" / ", v.Select(x => double.IsFinite(x) ? x.ToString("F2", tr) : "-"));
+        uyarilar.Add($"Lens dört köşe damasından, {heightMm.ToString("F1", tr)} mm kamera yüksekliğiyle hesaplandı (sapma {raw.RmsPx.ToString("F2", tr)} piksel, optik merkez {raw.Cx.ToString("F0", tr)}, {raw.Cy.ToString("F0", tr)}).");
+        uyarilar.Add($"Denetim — damaların bu lensle ölçülen karesi (gerçek 25 mm, sırayla sol üst / sağ üst / sol alt / sağ alt): {Mm(fit.BoardSquareMm)} mm; "
+            + $"lens öbür üç damadan çözülünce: {Mm(fit.HoldoutSquareMm)} mm.");
+        uyarilar.Add($"L dış köşelerinin şerit köşelerinden farkı (lens ve konum yalnız damalardan; rijit oturtma sonrası): {Mm(tapeGap)} mm.");
+        if (tapeGap.Max() > LensCalibration.MaxReferenceErrorMm)
+            uyarilar.Add($"Bir L köşesi şerit ölçüsünden {tapeGap.Max().ToString("F1", tr)} mm farklı. Şerit ölçülerini ve L parçalarının köşeye oturduğunu kontrol edin.");
+        if (fit.BoardSquareMm.Concat(fit.HoldoutSquareMm).Any(s => !(Math.Abs(s - CheckerLensCalibrator.SquareMm) <= 0.4)))
+            uyarilar.Add("Dama kareleri 25 mm'den 0,4 mm'den fazla farklı ölçülüyor. Damaların düz yattığını ve baskının ölçekli olmadığını kontrol edin.");
         var weak =found.Fits.Select((f, i) => (f, i)).Where(x => x.f.RmsX > 2 || x.f.RmsY > 2 || x.f.InliersX < 0.7 * x.f.SamplesX || x.f.InliersY < 0.7 * x.f.SamplesY).ToList();
         if (weak.Count > 0)
             uyarilar.Add("Şu köşelerde L parçasının dış kenarı tam düz bulunamadı: " + string.Join("; ", weak.Select(x =>
@@ -578,6 +575,11 @@ IResult CalibrateWithLCorners(byte[] bytes, TableSides sides)
         return Results.Json(new
         {
             kalibrasyon = LensStatus(saved),
+            lensKatsayilari = raw.Distortion,
+            lensOptikMerkez = new[] { raw.Cx, raw.Cy },
+            damaKaresiMm = fit.BoardSquareMm,
+            damaKaresiDisaridaMm = fit.HoldoutSquareMm,
+            seritFarkiMm = tapeGap,
             lKoseleri = found.Fits.Select((f, i) => new
             {
                 kose = names[i], uzunNokta = f.InliersX, uzunProfil = f.SamplesX, uzunSapmaMm = Math.Round(f.RmsX, 2),
@@ -888,7 +890,8 @@ app.MapPost("/api/olc", async (HttpRequest req) =>
             NoReferenceBrightnessDiff = uniformTable ? 35 : 0,
             CleanupMm = uniformTable ? 8 : 25,   // tek renkli tablada gurultu az; kucuk parcalarin koseleri yuvarlanmasin
             Locator = new LocatorOptions { SimplifyToleranceMm = 30, MinEdgeMm = 150 },
-            RefineEdges = form["parcaIncelt"] != "0"   // parca kenarlarini fotografta cok noktayla oturt (karsilastirma icin kapatilabilir)
+            RefineEdges = form["parcaIncelt"] != "0",   // parca kenarlarini fotografta cok noktayla oturt (karsilastirma icin kapatilabilir)
+            RefineTopEdge = form["ustKenar"] != "0"     // ust yuzey duzleminde kenar (TopEdgeRefiner); karsilastirma icin kapatilabilir
         };
         byte[] traceMask = null;
         if (captureTrace) options.CaptureTraceMask = png => traceMask = png;

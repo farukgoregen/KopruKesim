@@ -85,7 +85,7 @@ namespace KopruKesim.Vision
             out int found, out Point2[] imagePoints, out Point2[] tablePoints, Point2[] measuredCenters = null,
             BoardPlacement[] placements = null)
         {
-            return MatchBoardPoints(CheckerFinder.FindAll(frame, tag.Cols, tag.Rows), lengthMm, widthMm, tag, out found, out imagePoints, out tablePoints, measuredCenters, placements);
+            return MatchBoardPoints(CheckerFinder.FindAll(frame, tag.Cols, tag.Rows, 6), lengthMm, widthMm, tag, out found, out imagePoints, out tablePoints, measuredCenters, placements);
         }
 
         private static string MatchBoardPoints(List<KeyValuePair<Point2, Point2[]>> boards, double lengthMm, double widthMm, CalibrationTag tag,
@@ -123,11 +123,52 @@ namespace KopruKesim.Vision
             return null;
         }
 
-        /// <summary>Alti damali kalibrasyon: lens (odak, k1 k2 k3) ve kameranin tablaya gore konumu.</summary>
-        public static Result Calibrate(Mat frame, double lengthMm, double widthMm, CalibrationTag tag, Point2[] measuredCenters = null)
+        public static Result CalibrateTable(Mat frame, LensCalibration lens, double lengthMm, double widthMm,
+            CalibrationTag tag, Point2[] measuredCenters)
         {
             var res = new Result();
-            var boards = CheckerFinder.FindAll(frame, tag.Cols, tag.Rows);
+            res.Error = MatchBoardPoints(frame, lengthMm, widthMm, tag, out res.TagsFound,
+                out Point2[] pixels, out Point2[] millimeters, measuredCenters);
+            if (res.Error != null) return res;
+
+            using (var obj = new Mat(pixels.Length, 1, MatType.CV_64FC3))
+            using (var img = new Mat(pixels.Length, 1, MatType.CV_64FC2))
+            using (var k = CameraMatrix(lens))
+            using (var d = DistMat(lens))
+            using (var rv = new Mat())
+            using (var tv = new Mat())
+            {
+                for (int i = 0; i < pixels.Length; i++)
+                {
+                    obj.Set(i, 0, new Vec3d(millimeters[i].X, millimeters[i].Y, 0));
+                    img.Set(i, 0, new Vec2d(pixels[i].X, pixels[i].Y));
+                }
+                Cv2.SolvePnP(obj, img, k, d, rv, tv);
+                lens.Rvec = Enumerable.Range(0, 3).Select(i => rv.Get<double>(i)).ToArray();
+                lens.Tvec = Enumerable.Range(0, 3).Select(i => tv.Get<double>(i)).ToArray();
+            }
+
+            lens.TableLengthMm = lengthMm;
+            lens.TableWidthMm = widthMm;
+            lens.TagType = tag.Name;
+            lens.Points = pixels.Length;
+            lens.MeasuredTagCenters = measuredCenters;
+            Point2[] back = ImageToTable(lens, pixels);
+            double[] errors = back.Select((p, i) => Point2.Distance(p, millimeters[i])).ToArray();
+            lens.MeanMm = errors.Average();
+            lens.MaxMm = errors.Max();
+            int pointsPerTag = tag.Cols * tag.Rows;
+            res.TagErrorMm = Enumerable.Range(0, 6).Select(i => errors.Skip(i * pointsPerTag).Take(pointsPerTag).Average()).ToArray();
+            res.Calibration = lens;
+            return res;
+        }
+
+        /// <summary>Alti damali kalibrasyon: lens (odak, k1 k2 k3) ve kameranin tablaya gore konumu.</summary>
+        public static Result Calibrate(Mat frame, double lengthMm, double widthMm, CalibrationTag tag, Point2[] measuredCenters = null,
+            double? cameraHeightMm = null)
+        {
+            var res = new Result();
+            var boards = CheckerFinder.FindAll(frame, tag.Cols, tag.Rows, 6);
             res.Error = MatchBoardPoints(boards, lengthMm, widthMm, tag, out res.TagsFound, out Point2[] pixels, out Point2[] millimeters, measuredCenters);
             if (res.Error != null) return res;
             var objectPoints = millimeters.Select(p => new Point3f((float)p.X, (float)p.Y, 0)).ToArray();
@@ -175,7 +216,30 @@ namespace KopruKesim.Vision
                 });
             }
             bool solved = false;
-            try { solved = bundle.Solve() && bundle.RmsPx < rms && bundle.F > 0; }
+            try
+            {
+                solved = bundle.Solve() && bundle.F > 0 && bundle.RmsPx < rms;
+                if (cameraHeightMm.HasValue)
+                {
+                    double[] r = Rotations.FromRvec(bundle.Rvec);
+                    double z = -(r[2] * bundle.Tvec[0] + r[5] * bundle.Tvec[1] + r[8] * bundle.Tvec[2]);
+                    if (!(cameraHeightMm.Value > 0) || !(Math.Abs(z) > 1) || Math.Abs(r[8]) < 0.1)
+                    {
+                        res.Error = "Ã–lÃ§Ã¼len yÃ¼kseklikle baÅŸlangÄ±Ã§ kamera konumu kurulamadÄ±.";
+                        return res;
+                    }
+                    double scale = cameraHeightMm.Value / Math.Abs(z);
+                    double scale2 = scale * scale;
+                    bundle.CameraZMm = Math.Sign(z) * cameraHeightMm.Value;
+                    double dz = bundle.CameraZMm - z;
+                    for (int i = 0; i < 3; i++) bundle.Tvec[i] -= r[3 * i + 2] * dz;
+                    bundle.F *= scale;
+                    bundle.K1 *= scale2;
+                    bundle.K2 *= scale2 * scale2;
+                    bundle.K3 *= scale2 * scale2 * scale2;
+                    solved = bundle.Solve() && bundle.F > 0;
+                }
+            }
             catch (Exception e) when (e is InvalidOperationException || e is ArithmeticException) { solved = false; }
             if (Debug) Console.WriteLine("lens (serbest yerlesim): rms {0:F3} px, f {1:F1}, k {2:F4} {3:F4} {4:F4}", bundle.RmsPx, bundle.F, bundle.K1, bundle.K2, bundle.K3);
 
@@ -204,6 +268,14 @@ namespace KopruKesim.Vision
                 cal.BoardPlacements = bundle.Boards.Select(b => new BoardPlacement(b.X, b.Y, b.Theta * 180 / Math.PI)).ToArray();
             }
 
+            if (cameraHeightMm.HasValue && (!solved ||
+                Math.Abs(cal.CameraPosition().Height - cameraHeightMm.Value) > 0.001 ||
+                !IsTableProjectionInvertible(cal)))
+            {
+                res.Error = "Ã–lÃ§Ã¼len yÃ¼kseklikle geÃ§erli bir lens modeli bulunamadÄ±.";
+                return res;
+            }
+
             // Modelin hatasi: bulunan koseler tablaya geri izdusurulur, damanin (bulunan) yerine gore beklenen koseyle kiyaslanir
             Point2[] reference = cal.BoardPlacements == null
                 ? millimeters
@@ -221,6 +293,62 @@ namespace KopruKesim.Vision
             }
             res.Calibration = cal;
             return res;
+        }
+
+        internal static bool IsInvertible(LensCalibration lens, IEnumerable<Point2> pixels = null)
+        {
+            double[] d = lens.Distortion;
+            var imageCorners = new[] { new Point2(0, 0), new Point2(lens.ImageWidth, 0),
+                new Point2(0, lens.ImageHeight), new Point2(lens.ImageWidth, lens.ImageHeight) };
+            if (lens.Fisheye)
+            {
+                // Balik gozu tek degiskenli: theta_d(theta) noktalarin en buyuk acisina dek artan olmali, ters cevirme geri vermeli
+                foreach (Point2 pixel in pixels ?? imageCorners)
+                {
+                    Point2 q = Undistort(lens, pixel);
+                    double r = Math.Sqrt(q.X * q.X + q.Y * q.Y);
+                    if (double.IsNaN(r)) return false;
+                    double th = Math.Atan(r);
+                    for (int i = 1; i <= 64; i++)
+                        if (!(LensDistortion.ThetaDSlope(th * i / 64, d[0], d[1]) > 0.05)) return false;
+                    LensDistortion.Distort(true, d, q.X, q.Y, out double xd, out double yd);
+                    if (!(Point2.Distance(pixel, new Point2(lens.Cx + lens.Fx * xd, lens.Cy + lens.Fy * yd)) < 0.1)) return false;
+                }
+                return true;
+            }
+            foreach (Point2 pixel in pixels ?? imageCorners)
+            {
+                Point2 q = Undistort(lens, pixel);
+                for (int i = 1; i <= 64; i++)
+                {
+                    double u = q.X * i / 64, v = q.Y * i / 64, r2 = u * u + v * v;
+                    double scale = 1 + r2 * (d[0] + r2 * (d[1] + r2 * d[4]));
+                    double slope = d[0] + 2 * r2 * d[1] + 3 * r2 * r2 * d[4];
+                    double xx = scale + 2 * u * u * slope + 2 * d[2] * v + 6 * d[3] * u;
+                    double xy = 2 * u * v * slope + 2 * d[2] * u + 2 * d[3] * v;
+                    double yy = scale + 2 * v * v * slope + 6 * d[2] * v + 2 * d[3] * u;
+                    if (!(xx > 0 && xx * yy - xy * xy > 0.01)) return false;
+                    if (i < 64) continue;
+                    double px = lens.Cx + lens.Fx * (u * scale + 2 * d[2] * u * v + d[3] * (r2 + 2 * u * u));
+                    double py = lens.Cy + lens.Fy * (v * scale + d[2] * (r2 + 2 * v * v) + 2 * d[3] * u * v);
+                    if (!(Point2.Distance(pixel, new Point2(px, py)) < 0.1)) return false;
+                }
+            }
+            return true;
+        }
+
+        internal static bool IsTableProjectionInvertible(LensCalibration lens)
+        {
+            // Kalibrasyon yalnÄ±z tabla dÃ¼zleminde kullanÄ±lÄ±r. GÃ¶rÃ¼ntÃ¼nÃ¼n tabla dÄ±ÅŸÄ±ndaki kÃ¶ÅŸeleri
+            // tek karede gÃ¶zlemlenmez; Ã¶lÃ§Ã¼m alanÄ±ndaki ileri ve ters izdÃ¼ÅŸÃ¼mÃ¼ doÄŸrula.
+            const double margin = 50;
+            Point2[] table = Enumerable.Range(0, 5).SelectMany(y => Enumerable.Range(0, 5).Select(x =>
+                new Point2(-margin + (lens.TableLengthMm + 2 * margin) * x / 4,
+                           -margin + (lens.TableWidthMm + 2 * margin) * y / 4))).ToArray();
+            Point2[] pixels = TableToImage(lens, table);
+            Point2[] back = ImageToTable(lens, pixels);
+            return back.Select((p, i) => Point2.Distance(p, table[i])).All(distance => distance < 0.1)
+                && IsInvertible(lens, pixels);
         }
 
         /// <summary>
@@ -346,23 +474,7 @@ namespace KopruKesim.Vision
         public static Point2 Undistort(LensCalibration cal, Point2 pixel)
         {
             double xd = (pixel.X - cal.Cx) / cal.Fx, yd = (pixel.Y - cal.Cy) / cal.Fy;
-            double[] D = cal.Distortion;
-            double k1 = D.Length > 0 ? D[0] : 0, k2 = D.Length > 1 ? D[1] : 0, p1 = D.Length > 2 ? D[2] : 0, p2 = D.Length > 3 ? D[3] : 0, k3 = D.Length > 4 ? D[4] : 0;
-            double x = xd, y = yd;
-            for (int it = 0; it < 50; it++)
-            {
-                double r2 = x * x + y * y, rad = 1 + r2 * (k1 + r2 * (k2 + r2 * k3));
-                double fx = x * rad + 2 * p1 * x * y + p2 * (r2 + 2 * x * x) - xd;
-                double fy = y * rad + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y - yd;
-                if (Math.Abs(fx) + Math.Abs(fy) < 1e-14) break;
-                double dr = k1 + 2 * k2 * r2 + 3 * k3 * r2 * r2;   // d(rad)/d(r2)
-                double jxx = rad + 2 * x * x * dr + 2 * p1 * y + 6 * p2 * x, jxy = 2 * x * y * dr + 2 * p1 * x + 2 * p2 * y;
-                double jyx = 2 * x * y * dr + 2 * p1 * x + 2 * p2 * y, jyy = rad + 2 * y * y * dr + 6 * p1 * y + 2 * p2 * x;
-                double det = jxx * jyy - jxy * jyx;
-                if (Math.Abs(det) < 1e-12) break;
-                x -= (jyy * fx - jxy * fy) / det;
-                y -= (-jyx * fx + jxx * fy) / det;
-            }
+            LensDistortion.Undistort(cal.Fisheye, cal.Distortion, xd, yd, out double x, out double y);
             return new Point2(x, y);
         }
 
@@ -376,6 +488,23 @@ namespace KopruKesim.Vision
         public static Point2[] TableToImage(LensCalibration cal, Point2[] table, double zMm)
         {
             double z = zMm * CameraSideSign(cal);
+            if (cal.Fisheye)
+            {
+                // Balik gozu: OpenCV ProjectPoints radyal formul kullanir; izdusum burada (LensDistortion)
+                double[] r = cal.Rotation(), t = cal.Tvec;
+                var outPts = new Point2[table.Length];
+                for (int i = 0; i < table.Length; i++)
+                {
+                    Point2 tablePoint = cal.MetricCorrection == null ? table[i] : cal.MetricCorrection.Invert(table[i]);
+                    Point2 m = cal.Correction == null ? tablePoint : cal.Correction.Invert(tablePoint);
+                    double xc = r[0] * m.X + r[1] * m.Y + r[2] * z + t[0];
+                    double yc = r[3] * m.X + r[4] * m.Y + r[5] * z + t[1];
+                    double zc = r[6] * m.X + r[7] * m.Y + r[8] * z + t[2];
+                    LensDistortion.Distort(true, cal.Distortion, xc / zc, yc / zc, out double xd, out double yd);
+                    outPts[i] = new Point2(cal.Fx * xd + cal.Cx, cal.Fy * yd + cal.Cy);
+                }
+                return outPts;
+            }
             using (var obj = new Mat(table.Length, 1, MatType.CV_64FC3))
             using (var img = new Mat())
             using (var k = CameraMatrix(cal))

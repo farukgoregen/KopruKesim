@@ -129,6 +129,23 @@ namespace KopruKesim.Vision
             }
             finally { options.PxPerMm = oldScale; }
             if (tags != null) RemoveTags(output.Slabs, tags);
+            // Ust yuzey kenari (TopEdgeRefiner): kalinligin fotograftaki gorunumu kenara gore degisir; ust yuzey
+            // duzleminde aranan kenar her kenarda ayni yoldan gercek yere oturur.
+            if (options.RefineTopEdge && emptyTable != null && !emptyTable.Empty() && emptyTable.Size() == frame.Size())
+            {
+                for (int i = 0; i < output.Slabs.Count; i++)
+                {
+                    SlabResult s = output.Slabs[i];
+                    if (s.Vertices == null || s.Vertices.Length != 4) continue;
+                    Point2[] top = TopEdgeRefiner.Refine(frame, emptyTable, lens, thicknessMm, s.Vertices, out string why);
+                    if (Environment.GetEnvironmentVariable("KK_DEBUG") == "1")
+                        Console.WriteLine("  [ust yuzey kenari] parca " + i + ": " + (top != null ? "uygulandi" : "uygulanmadi (" + why + ")"));
+                    if (top == null) continue;
+                    SlabResult r = SlabLocator.Describe(top, new LocatorOptions());
+                    r.IsReliable = s.IsReliable; r.Note = s.Note; r.Method = (s.Method ?? "") + "+ust";
+                    output.Slabs[i] = r;
+                }
+            }
             // Disariya verilen kalibrasyon gercek tablanin: genisletilmis ustten gorunumde koseleri m mm iceride
             var real = new TableCalibration
             {

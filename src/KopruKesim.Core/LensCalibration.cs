@@ -22,6 +22,11 @@ namespace KopruKesim.Core
         public double Fx, Fy, Cx, Cy;
         /// <summary>Bukulme katsayilari, OpenCV sirasiyla: k1, k2, p1, p2, k3 (ve varsa k4, k5, k6).</summary>
         public double[] Distortion = new double[5];
+        /// <summary>
+        /// Bukulme formulu: false = radyal (OpenCV standart, Distortion k1 k2 p1 p2 k3), true = balik gozu (Distortion
+        /// k1 k2, gerisi 0; LensDistortion). Kayitta "Model=balikgozu"; satir yoksa radyal (eski kayitlar).
+        /// </summary>
+        public bool Fisheye;
         /// <summary>Donme (Rodrigues vektoru) ve oteleme (mm): tabla -> kamera.</summary>
         public double[] Rvec = new double[3], Tvec = new double[3];
         /// <summary>Etiket koselerinin yeniden izdusum hatasi (piksel) ve tabla uzerindeki hatasi (mm).</summary>
@@ -140,6 +145,7 @@ namespace KopruKesim.Core
                 "Goruntu=" + ImageWidth.ToString(c) + "x" + ImageHeight.ToString(c),
                 "K=" + arr(new[] { Fx, Fy, Cx, Cy }),
                 "Bukulme=" + arr(Distortion),
+                "Model=" + (Fisheye ? "balikgozu" : "radyal"),
                 "Rvec=" + arr(Rvec),
                 "Tvec=" + arr(Tvec),
                 "Hata=" + arr(new[] { RmsPx, MeanMm, MaxMm }),
@@ -196,6 +202,7 @@ namespace KopruKesim.Core
                         cal.Fx = k[0]; cal.Fy = k[1]; cal.Cx = k[2]; cal.Cy = k[3];
                         break;
                     case "Bukulme": cal.Distortion = arr(val); break;
+                    case "Model": cal.Fisheye = val == "balikgozu"; break;
                     case "Rvec": cal.Rvec = arr(val); break;
                     case "Tvec": cal.Tvec = arr(val); break;
                     case "Hata":
